@@ -232,6 +232,9 @@ data "aws_iam_policy_document" "deploy" {
     effect = "Allow"
     actions = [
       "cloudfront:CreateDistribution",
+      # The provider calls CreateDistributionWithTags -- a separate IAM
+      # action -- whenever tags are present, and default_tags always are.
+      "cloudfront:CreateDistributionWithTags",
       "cloudfront:GetDistribution",
       "cloudfront:GetDistributionConfig",
       "cloudfront:UpdateDistribution",
