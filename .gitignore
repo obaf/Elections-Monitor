@@ -1,0 +1,34 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+.terraform.lock.hcl.bak
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Bootstrap keeps LOCAL state -- never commit it, it is not encrypted.
+bootstrap/terraform.tfstate
+bootstrap/terraform.tfstate.backup
+
+# Sensitive: variable files may contain account IDs / ARNs
+*.auto.tfvars
+secrets.tfvars
+
+# AWS / credentials -- never commit
+.aws/
+credentials
+*.pem
+*.key
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

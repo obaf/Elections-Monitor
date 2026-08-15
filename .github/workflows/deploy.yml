@@ -1,0 +1,116 @@
+name: Deploy irev2.com
+
+# Push to main  -> plan + apply + CloudFront invalidation
+# Pull request  -> plan only, posted as a PR comment
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'site/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'site/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write      # required to fetch the OIDC token for AWS
+  contents: read
+  pull-requests: write # required to post the plan comment
+
+# Never let two applies race on the same state.
+concurrency:
+  group: terraform-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TF_IN_AUTOMATION: 'true'
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-elections-monitor-${{ github.run_id }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: latest
+          terraform_wrapper: false
+
+      - name: Terraform init
+        run: terraform init -input=false -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}"
+
+      - name: Terraform fmt check
+        run: terraform fmt -check -recursive ..
+
+      - name: Terraform validate
+        run: terraform validate -no-color
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -input=false -no-color -out=tfplan
+
+      - name: Comment plan on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          PLAN: ${{ steps.plan.outputs.stdout }}
+        with:
+          script: |
+            const plan = (process.env.PLAN || '').slice(0, 60000);
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `#### Terraform Plan 📖\n\n<details><summary>Show plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`
+            });
+
+      - name: Terraform apply
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: Invalidate CloudFront cache
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          DIST_ID="$(terraform output -raw cloudfront_distribution_id)"
+          echo "Invalidating distribution $DIST_ID"
+          aws cloudfront create-invalidation \
+            --distribution-id "$DIST_ID" \
+            --paths '/*' \
+            --query 'Invalidation.Id' --output text
+
+      - name: Deployment summary
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          {
+            echo "### Deployed ✅"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Site | $(terraform output -raw site_url) |"
+            echo "| Bucket | \`$(terraform output -raw bucket_name)\` |"
+            echo "| Distribution | \`$(terraform output -raw cloudfront_distribution_id)\` |"
+            echo "| CloudFront host | \`$(terraform output -raw cloudfront_domain_name)\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
