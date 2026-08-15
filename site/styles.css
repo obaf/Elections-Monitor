@@ -12,6 +12,12 @@
 
 * { box-sizing: border-box; }
 
+/* The browser's own [hidden] rule is display:none, but any class that sets a
+   display -- .btn does -- outranks it, and the element stays on screen. That
+   silently exposed the admin-only buttons to every visitor, so make [hidden]
+   win outright. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
