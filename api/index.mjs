@@ -85,10 +85,26 @@ async function markCounted(puCode, results) {
   });
 }
 
+// Append-only: every entry is a fresh item under one partition, and nothing in
+// the code updates or deletes them. Changing a total on an election portal is
+// a contestable act, so the record of who did it and why has to outlive the
+// state it changed.
+async function audit(action, puCode, detail) {
+  const ts = new Date().toISOString();
+  await put({
+    pk: 'AUDIT',
+    sk: `${ts}#${randomUUID()}`,
+    ts, action, puCode,
+    actor: detail.actor || 'admin',
+    reason: detail.reason || '',
+    figures: detail.figures || {},
+  });
+}
+
 // Subtracts the snapshot back out and records the decision. Kept as a distinct
 // state rather than deleting the row, so the totals page can show that a
 // result was deliberately withdrawn instead of never having arrived.
-async function revokeCounted(puCode) {
+async function revokeCounted(puCode, reason, actor) {
   const cnt = await get('CNT', puCode);
   if (!cnt || !cnt.v) return { ok: false, reason: 'not currently added' };
 
@@ -99,10 +115,17 @@ async function revokeCounted(puCode) {
   await ddb('DynamoDB_20120810.UpdateItem', {
     TableName: TABLE,
     Key: item({ pk: 'CNT', sk: puCode }),
-    UpdateExpression: 'SET v = :zero, st = :revoked REMOVE res',
-    ExpressionAttributeValues: item({ ':zero': 0, ':revoked': 'revoked' }),
+    // revRes keeps what was withdrawn, so the breakdown can still show the
+    // figures a revoked unit used to contribute.
+    UpdateExpression: 'SET v = :zero, st = :revoked, rsn = :why, rvk = :ts, revRes = :applied REMOVE res',
+    ExpressionAttributeValues: item({
+      ':zero': 0, ':revoked': 'revoked', ':why': reason,
+      ':ts': new Date().toISOString(), ':applied': applied,
+    }),
   });
-  return { ok: true, removed: applied };
+
+  await audit('revoke', puCode, { reason, actor, figures: applied });
+  return { ok: true, removed: applied, reason };
 }
 
 // Totals live in one item as a party -> votes map, updated with an additive
@@ -270,6 +293,11 @@ export const handler = async (event) => {
           uploads: r.n || 0,
           status: r.st || (r.v ? 'added' : 'pending'),
           results: r.res || {},
+          // Shown publicly on a revoked unit: withdrawing a result from a public
+          // tally should be accountable to everyone, not only to the admin.
+          reason: r.rsn || '',
+          revokedAt: r.rvk || '',
+          revokedFigures: r.revRes || {},
         })),
       }, { 'cache-control': 'public, max-age=15' });
     }
@@ -363,15 +391,35 @@ export const handler = async (event) => {
         if (cnt?.v) return json(200, { ok: true, note: 'already counted' });
         // Approving after a revoke is a deliberate reversal and is allowed.
         const figures = uploads[0].extracted || {};
+        const reason = String(body.reason || '').slice(0, 500).trim();
         await addTotals(figures);
         await markCounted(puCode, figures);
+        const cfg = await adminConfig();
+        await audit(cnt?.st === 'revoked' ? 're-approve' : 'approve', puCode, {
+          reason, actor: cfg.username, figures,
+        });
         return json(200, { ok: true, added: figures });
       }
 
       if (method === 'POST' && path === '/admin/revoke') {
         const puCode = String(body.puCode || '');
-        const r = await revokeCounted(puCode);
+        const reason = String(body.reason || '').slice(0, 500).trim();
+        // Required, not optional: a revoke with no stated reason is exactly the
+        // thing that cannot be defended later.
+        if (reason.length < 3) return json(400, { error: 'a reason is required to revoke a result' });
+        const cfg = await adminConfig();
+        const r = await revokeCounted(puCode, reason, cfg.username);
         return json(r.ok ? 200 : 409, r);
+      }
+
+      if (method === 'GET' && path === '/admin/audit') {
+        const entries = await query('AUDIT', { ScanIndexForward: false, Limit: 200 });
+        return json(200, {
+          entries: entries.map((e) => ({
+            ts: e.ts, action: e.action, puCode: e.puCode,
+            actor: e.actor, reason: e.reason, figures: e.figures || {},
+          })),
+        });
       }
     }
 

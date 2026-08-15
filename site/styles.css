@@ -97,6 +97,31 @@ body {
 .pill-added { background: #e2f2e8; color: var(--brand-dark); }
 .pill-revoked { background: #fde9e7; color: var(--accent); }
 
+.bd td.struck { color: var(--muted); text-decoration: line-through; }
+.why {
+  margin-top: 5px;
+  font-size: 12px;
+  font-style: italic;
+  color: #6b5416;
+  white-space: normal;
+  max-width: 260px;
+}
+.btn-revoke { color: var(--accent); border-color: #e9b7b2; background: #fff; }
+.btn-revoke:hover { background: #fde9e7; }
+
+.audit { margin: 16px 0 22px; }
+.audit h2 { font-size: 18px; margin: 0 0 10px; }
+.audit-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  margin-bottom: 8px;
+}
+
 .toolbar { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
 .toolbar label.grow { flex: 1 1 260px; display: flex; flex-direction: column; gap: 4px; }
 .toolbar span { font-size: 13px; font-weight: 600; color: var(--muted); }

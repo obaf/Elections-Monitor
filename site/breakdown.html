@@ -29,6 +29,19 @@
   </div>
 </dialog>
 
+<dialog id="revoke-dlg" class="dlg">
+  <h2>Revoke this result</h2>
+  <p class="muted" id="revoke-pu"></p>
+  <label class="fld"><span>Reason — required, and shown publicly on this polling unit</span>
+    <textarea id="revoke-reason" rows="3"
+      placeholder="e.g. figures do not match the physical result sheet"></textarea></label>
+  <p id="revoke-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="revoke-go" class="btn btn-primary">Revoke and remove from totals</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
 <div class="page wide">
   <h1>Breakdown of results added to the totals</h1>
   <p class="muted" id="intro">Loading…</p>
@@ -42,7 +55,10 @@
       <input id="show-all" type="checkbox">
       Show every polling unit, including those with no photos
     </label>
+    <button id="audit-btn" class="btn" hidden>View audit log</button>
   </div>
+
+  <div id="audit" class="audit" hidden></div>
 
   <div class="scroller">
     <table class="bd">
@@ -100,25 +116,33 @@ function rowHtml(pu) {
   const [code, name] = pu;
   const bd = BD[code];
   const res = (bd?.status === 'added' && bd.results) ? bd.results : null;
+  // A revoked unit still shows what it used to contribute, struck through, so
+  // the withdrawal is legible rather than the row just going blank.
+  const gone = bd?.status === 'revoked' ? (bd.revokedFigures || {}) : null;
   const st = statusOf(code);
 
   const cells = PARTIES.map((p) => {
-    const v = res?.[p];
-    return `<td class="num">${v === undefined ? '' : nf.format(v)}</td>`;
+    if (res && res[p] !== undefined) return `<td class="num">${nf.format(res[p])}</td>`;
+    if (gone && gone[p] !== undefined) return `<td class="num struck">${nf.format(gone[p])}</td>`;
+    return '<td class="num"></td>';
   });
+
+  const why = (st.key === 'revoked' && bd?.reason)
+    ? `<div class="why">“${esc(bd.reason)}”${bd.revokedAt
+        ? `<br><span class="pu-code">${new Date(bd.revokedAt).toLocaleString()}</span>` : ''}</div>`
+    : '';
 
   let admin = '';
   if (isAdmin()) {
     admin = st.key === 'added'
-      ? `<td><button class="btn btn-small" style="color:var(--accent);border-color:#e9b7b2"
-             data-revoke="${esc(code)}">Revoke</button></td>`
+      ? `<td><button class="btn btn-small btn-revoke" data-revoke="${esc(code)}">Revoke</button></td>`
       : `<td><span class="muted">—</span></td>`;
   }
 
   return `<tr data-code="${esc(code)}">
     <td class="pu"><strong>${esc(name)}</strong><br><span class="pu-code">${esc(code)}</span></td>
     ${cells.join('')}
-    <td><span class="pill pill-${st.key}">${st.label}</span></td>
+    <td><span class="pill pill-${st.key}">${st.label}</span>${why}</td>
     ${admin}
   </tr>`;
 }
@@ -185,8 +209,10 @@ async function load() {
   // Columns ordered by size, so the parties that matter read left to right.
   const sums = {};
   for (const b of Object.values(BD)) {
-    if (b.status !== 'added') continue;
     for (const [p, v] of Object.entries(b.results || {})) sums[p] = (sums[p] || 0) + v;
+    // Revoked figures earn a column too, otherwise a struck-through row would
+    // have nowhere to display and the withdrawal would be invisible.
+    for (const p of Object.keys(b.revokedFigures || {})) sums[p] = sums[p] || 0;
   }
   PARTIES = Object.keys(sums).sort((a, b) => sums[b] - sums[a]);
 
@@ -200,6 +226,8 @@ function refreshAdminUi() {
   $('#admin-flag').hidden = !isAdmin();
   $('#admin-login-btn').hidden = isAdmin();
   $('#admin-logout-btn').hidden = !isAdmin();
+  $('#audit-btn').hidden = !isAdmin();
+  if (!isAdmin()) { $('#audit').hidden = true; $('#audit-btn').textContent = 'View audit log'; }
 }
 
 $('#admin-login-btn').addEventListener('click', () => {
@@ -240,33 +268,82 @@ $('#admin-logout-btn').addEventListener('click', () => {
   toast('Logged out of admin.');
 });
 
-document.addEventListener('click', async (e) => {
+let revokeTarget = null;
+
+document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-revoke]');
   if (!btn) return;
-  const code = btn.dataset.revoke;
-  const name = DATA.pus.find((p) => p[0] === code)?.[1] || code;
-  if (!confirm(`Remove the result for "${name}" from the totals?`)) return;
+  revokeTarget = btn.dataset.revoke;
+  const name = DATA.pus.find((p) => p[0] === revokeTarget)?.[1] || revokeTarget;
+  $('#revoke-pu').textContent = `${name} · ${revokeTarget}`;
+  $('#revoke-reason').value = '';
+  $('#revoke-err').hidden = true;
+  $('#revoke-dlg').showModal();
+});
 
-  btn.disabled = true; btn.textContent = 'Revoking…';
+$('#revoke-go').addEventListener('click', async () => {
+  const err = $('#revoke-err');
+  const reason = $('#revoke-reason').value.trim();
+  if (reason.length < 3) {
+    err.textContent = 'Please give a reason — it is recorded against this result.';
+    err.hidden = false;
+    return;
+  }
+  const go = $('#revoke-go');
+  go.disabled = true; go.textContent = 'Revoking…';
   try {
     const r = await fetch(`${API}/admin/revoke`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ puCode: code }),
+      body: JSON.stringify({ puCode: revokeTarget, reason }),
     });
     if (r.status === 401) {
       adminToken = ''; sessionStorage.removeItem('irev2-admin');
-      refreshAdminUi(); build();
-      toast('Your admin session expired. Log in again from the portal.');
+      $('#revoke-dlg').close(); refreshAdminUi(); build();
+      toast('Your admin session expired. Please log in again.');
       return;
     }
     if (!r.ok) throw new Error('revoke failed');
+    $('#revoke-dlg').close();
     toast('Revoked — the figures have been removed from the totals.');
     await load();
+    if (!$('#audit').hidden) loadAudit();
   } catch {
-    btn.disabled = false; btn.textContent = 'Revoke';
-    toast('Could not revoke that result. Please try again.');
+    err.textContent = 'Could not revoke that result. Please try again.';
+    err.hidden = false;
+  } finally {
+    go.disabled = false; go.textContent = 'Revoke and remove from totals';
   }
+});
+
+async function loadAudit() {
+  const box = $('#audit');
+  box.hidden = false;
+  box.innerHTML = '<p class="muted">Loading audit log…</p>';
+  const r = await fetch(`${API}/admin/audit`, { headers: { authorization: `Bearer ${adminToken}` } });
+  if (!r.ok) { box.innerHTML = '<p class="muted">Could not load the audit log.</p>'; return; }
+  const { entries } = await r.json();
+  if (!entries.length) { box.innerHTML = '<p class="muted">No approvals or revocations recorded yet.</p>'; return; }
+  box.innerHTML = '<h2>Audit log</h2>' + entries.map((e) => {
+    const name = DATA.pus.find((p) => p[0] === e.puCode)?.[1] || e.puCode;
+    const figs = Object.entries(e.figures || {}).sort((a, b) => b[1] - a[1])
+      .map(([p, v]) => `${esc(p)} ${nf.format(v)}`).join(' · ');
+    return `<div class="audit-row">
+      <span class="pill pill-${e.action === 'revoke' ? 'revoked' : 'added'}">${esc(e.action)}</span>
+      <div>
+        <strong>${esc(name)}</strong> <span class="pu-code">${esc(e.puCode)}</span><br>
+        <span class="pu-code">${new Date(e.ts).toLocaleString()} · by ${esc(e.actor)}</span>
+        ${e.reason ? `<div class="why">“${esc(e.reason)}”</div>` : ''}
+        ${figs ? `<div class="pu-code">${figs}</div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+$('#audit-btn').addEventListener('click', () => {
+  const box = $('#audit');
+  if (box.hidden) { loadAudit(); $('#audit-btn').textContent = 'Hide audit log'; }
+  else { box.hidden = true; $('#audit-btn').textContent = 'View audit log'; }
 });
 
 let debounce;
