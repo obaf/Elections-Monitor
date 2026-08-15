@@ -9,6 +9,12 @@
 </head>
 <body>
 
+<div class="topbar">
+  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE — you can approve photos manually</span>
+  <button id="admin-login-btn" class="btn btn-small">admin login</button>
+  <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
+</div>
+
 <p class="notice" role="status">
   Please enable “location services” on your phone and also give your camera
   permissions to tag photos with location data
@@ -64,7 +70,35 @@
      Photos are stored for verification and cannot be downloaded.</p>
 </footer>
 
-<input id="file" type="file" accept="image/*" capture="environment" hidden>
+<!-- Two inputs rather than one: `capture` opens the camera directly, and its
+     absence lets the phone offer the photo library. A single input cannot do
+     both, so the choice is made before the picker opens. -->
+<input id="file-camera" type="file" accept="image/*" capture="environment" hidden>
+<input id="file-library" type="file" accept="image/*" hidden>
+
+<dialog id="source-dlg" class="dlg">
+  <h2>Add a result photo</h2>
+  <p class="muted" id="source-pu"></p>
+  <div class="dlg-actions">
+    <button class="btn btn-primary" data-source="camera">Take a photo now</button>
+    <button class="btn" data-source="library">Choose from photo library</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="login-dlg" class="dlg">
+  <h2>Admin login</h2>
+  <p class="muted">Log in to approve photos directly from the portal.</p>
+  <label class="fld"><span>Username</span>
+    <input id="admin-u" type="text" autocomplete="username"></label>
+  <label class="fld"><span>Password</span>
+    <input id="admin-p" type="password" autocomplete="current-password"></label>
+  <p id="login-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="admin-go" class="btn btn-primary">Log in</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
 
 <div id="toast" class="toast" hidden></div>
 

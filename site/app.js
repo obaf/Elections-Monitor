@@ -9,6 +9,12 @@ let filtered = [];
 let rendered = 0;
 let pendingPu = null;            // polling unit awaiting a file pick
 
+/* The admin sees the ordinary page plus approve controls, rather than a
+   separate screen, so the thing being approved is viewed in its real context.
+   Same storage key as admin.html, so a login on either carries across. */
+let adminToken = sessionStorage.getItem('irev2-admin') || '';
+const isAdmin = () => !!adminToken;
+
 /* Stable per-browser id. The "two different phones" rule needs to tell
    devices apart; this is the cheapest honest signal available client-side. */
 const deviceId = (() => {
@@ -104,6 +110,20 @@ function applyFilter() {
 
 /* ------------------------------- extracts -------------------------------- */
 
+function adminBox(u, counted, code) {
+  if (!isAdmin() || counted) return '';
+  const why = u.inOsun
+    ? 'This photo has Osun location data but has not been matched by a second phone yet.'
+    : 'This photo carries no Osun location data, so it cannot be counted automatically.';
+  return `<div class="admin-box">
+    <p>${why} Approving adds these figures to the totals for this polling unit.</p>
+    <button class="btn btn-primary" data-act="approve"
+            data-code="${esc(code)}" data-upload="${esc(u.uploadId)}">
+      Approve this photo into the totals
+    </button>
+  </div>`;
+}
+
 async function toggleExtract(code, tr) {
   const next = tr.nextElementSibling;
   if (next && next.classList.contains('detail')) { next.remove(); return; }
@@ -142,6 +162,7 @@ async function toggleExtract(code, tr) {
       <img src="${esc(u.url)}" alt="Result sheet photo ${i + 1}" loading="lazy"
            oncontextmenu="return false">
       ${table}
+      ${adminBox(u, data.counted, code)}
     </div>`;
   }).join('');
 
@@ -154,7 +175,13 @@ async function toggleExtract(code, tr) {
 
 /* -------------------------------- upload --------------------------------- */
 
-$('#file').addEventListener('change', async (e) => {
+// Both inputs feed the same handler; they differ only in whether `capture`
+// sends the phone straight to the camera.
+['#file-camera', '#file-library'].forEach((sel) => {
+  $(sel).addEventListener('change', (e) => handleFile(e));
+});
+
+async function handleFile(e) {
   const file = e.target.files?.[0];
   const code = pendingPu;
   e.target.value = '';
@@ -185,7 +212,7 @@ $('#file').addEventListener('change', async (e) => {
     console.error(err);
     toast('Sorry, that upload did not go through. Please try again.');
   }
-});
+}
 
 function refreshRow(code) {
   const tr = document.querySelector(`tr[data-code="${CSS.escape(code)}"]`);
@@ -195,17 +222,107 @@ function refreshRow(code) {
   tr.querySelector('.link-extract').textContent = n ? 'view extracted result' : 'no result yet';
 }
 
+/* --------------------------------- admin --------------------------------- */
+
+function refreshAdminUi() {
+  $('#admin-flag').hidden = !isAdmin();
+  $('#admin-login-btn').hidden = isAdmin();
+  $('#admin-logout-btn').hidden = !isAdmin();
+}
+
+$('#admin-login-btn').addEventListener('click', () => {
+  $('#login-err').hidden = true;
+  $('#login-dlg').showModal();
+});
+
+$('#admin-logout-btn').addEventListener('click', () => {
+  adminToken = '';
+  sessionStorage.removeItem('irev2-admin');
+  refreshAdminUi();
+  document.querySelectorAll('tr.detail').forEach((d) => d.remove());
+  toast('Logged out of admin.');
+});
+
+$('#admin-go').addEventListener('click', async () => {
+  const err = $('#login-err');
+  err.hidden = true;
+  try {
+    const r = await fetch(`${API}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: $('#admin-u').value, password: $('#admin-p').value }),
+    });
+    if (!r.ok) { err.textContent = 'Invalid username or password.'; err.hidden = false; return; }
+    adminToken = (await r.json()).token;
+    sessionStorage.setItem('irev2-admin', adminToken);
+    $('#admin-p').value = '';
+    $('#login-dlg').close();
+    refreshAdminUi();
+    toast('Logged in as admin. Open a polling unit to approve a photo.');
+  } catch {
+    err.textContent = 'Could not reach the server. Please try again.';
+    err.hidden = false;
+  }
+});
+
+async function approve(code, uploadId, btn) {
+  btn.disabled = true;
+  btn.textContent = 'Approving…';
+  try {
+    const r = await fetch(`${API}/admin/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ puCode: code, uploadId }),
+    });
+    if (r.status === 401) {
+      adminToken = '';
+      sessionStorage.removeItem('irev2-admin');
+      refreshAdminUi();
+      toast('Your admin session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) throw new Error('approve failed');
+    toast('Approved — the figures have been added to the totals.');
+    await loadSummary();
+    refreshRow(code);
+    // Reopen the panel so it redraws with the verified state.
+    const tr = document.querySelector(`tr[data-code="${CSS.escape(code)}"]`);
+    if (tr) { document.querySelectorAll('tr.detail').forEach((d) => d.remove()); toggleExtract(code, tr); }
+  } catch {
+    btn.disabled = false;
+    btn.textContent = 'Approve this photo into the totals';
+    toast('Could not approve that photo. Please try again.');
+  }
+}
+
 /* -------------------------------- wiring --------------------------------- */
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) {
+    e.target.closest('dialog')?.close();
+    return;
+  }
+
+  const src = e.target.closest('[data-source]');
+  if (src) {
+    $('#source-dlg').close();
+    $(src.dataset.source === 'camera' ? '#file-camera' : '#file-library').click();
+    return;
+  }
+
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const code = btn.dataset.code;
+
   if (btn.dataset.act === 'upload') {
     pendingPu = code;
-    $('#file').click();
+    const pu = DATA?.pus.find((p) => p[0] === code);
+    $('#source-pu').textContent = pu ? `${pu[1]} · ${code}` : code;
+    $('#source-dlg').showModal();
   } else if (btn.dataset.act === 'extract') {
     toggleExtract(code, btn.closest('tr'));
+  } else if (btn.dataset.act === 'approve') {
+    approve(code, btn.dataset.upload, btn);
   }
 });
 
@@ -229,6 +346,7 @@ async function loadSummary() {
 }
 
 (async function init() {
+  refreshAdminUi();
   try {
     DATA = await (await fetch('/polling-units.json')).json();
   } catch {

@@ -19,6 +19,33 @@ body {
   background: var(--bg);
 }
 
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--ink);
+}
+
+.admin-flag {
+  margin-right: auto;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .6px;
+  color: #ffd66b;
+}
+
+.btn-small {
+  padding: 5px 12px;
+  font-size: 13px;
+  border-radius: 6px;
+  background: transparent;
+  color: #fff;
+  border-color: #4a5261;
+}
+.btn-small:hover { background: #262c37; }
+
 .notice {
   margin: 0;
   padding: 12px 16px;
@@ -27,6 +54,33 @@ body {
   font-weight: 600;
   text-align: center;
 }
+
+/* dialogs */
+.dlg {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px;
+  max-width: min(420px, 92vw);
+  box-shadow: 0 20px 50px rgba(0,0,0,.25);
+}
+.dlg::backdrop { background: rgba(10,14,20,.45); }
+.dlg h2 { margin: 0 0 6px; font-size: 20px; }
+.dlg-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.btn-quiet { border: 0; background: none; color: var(--muted); }
+.btn-quiet:hover { background: none; text-decoration: underline; }
+.fld { display: block; margin-top: 12px; }
+.fld span { display: block; font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 4px; }
+.login-err { color: var(--accent); font-weight: 600; font-size: 14px; margin: 10px 0 0; }
+
+/* admin-only affordances on the public page */
+.admin-box {
+  margin-top: 8px;
+  padding: 10px;
+  border: 1px dashed #c8a54a;
+  border-radius: 8px;
+  background: #fffbef;
+}
+.admin-box p { margin: 0 0 8px; font-size: 13px; color: #6b5416; }
 
 .hero {
   background: var(--card);
