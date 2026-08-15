@@ -8,12 +8,14 @@ on:
     paths:
       - 'infra/**'
       - 'site/**'
+      - 'api/**'
       - '.github/workflows/deploy.yml'
   pull_request:
     branches: [main]
     paths:
       - 'infra/**'
       - 'site/**'
+      - 'api/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
