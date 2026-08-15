@@ -160,13 +160,15 @@ function collectFigures(uploadId) {
   const figures = {};
   for (const tr of tbl.querySelectorAll('tbody tr')) {
     const party = tr.querySelector('.p-in').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-    const raw = tr.querySelector('.v-in').value.trim();
+    // Thousands separators and stray spaces are how people actually type
+    // figures off a sheet, so accept them instead of rejecting the row.
+    const raw = tr.querySelector('.v-in').value.trim().replace(/[,\s]/g, '');
     if (!party && raw === '') continue;                       // blank row, ignore
     if (!party) return { error: 'Every row needs a party name.' };
-    if (raw === '') return { error: `Enter a score for ${party}.` };
+    if (raw === '') return { error: `Enter a score for ${party} — digits only.` };
     const votes = Number(raw);
     if (!Number.isInteger(votes) || votes < 0) {
-      return { error: `${party} needs a whole number, zero or more.` };
+      return { error: `“${raw}” is not a valid score for ${party}. Use a whole number, zero or more.` };
     }
     if (figures[party] !== undefined) return { error: `${party} appears twice.` };
     figures[party] = votes;
@@ -263,7 +265,7 @@ async function handleFile(e) {
     })).json();
 
     toast(done.message, 12000);
-    await loadSummary();
+    await loadSummary({ fresh: true });
     refreshRow(code);
   } catch (err) {
     console.error(err);
@@ -329,14 +331,18 @@ $('#admin-go').addEventListener('click', async () => {
 
 async function approve(code, uploadId, btn) {
   const err = document.querySelector(`[data-err="${CSS.escape(uploadId)}"]`);
+  const fail = (msg) => {
+    // Loud on both channels: an inline line alone is easy to miss, and a
+    // silent failure here reads as "approving does nothing".
+    if (err) { err.textContent = msg; err.hidden = false; }
+    toast(msg, 10000);
+  };
+
   const { figures, error } = collectFigures(uploadId);
-  if (error) {
-    if (err) { err.textContent = error; err.hidden = false; }
-    else toast(error);
-    return;
-  }
+  if (error) { fail(error); return; }
   if (err) err.hidden = true;
 
+  const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Approving…';
   try {
@@ -345,24 +351,39 @@ async function approve(code, uploadId, btn) {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
       body: JSON.stringify({ puCode: code, uploadId, figures }),
     });
+
+    let payload = {};
+    try { payload = await r.json(); } catch { /* non-JSON body */ }
+
     if (r.status === 401) {
       adminToken = '';
       sessionStorage.removeItem('irev2-admin');
       refreshAdminUi();
-      toast('Your admin session expired. Please log in again.');
+      fail('Your admin session expired. Please log in again, then approve.');
       return;
     }
-    if (!r.ok) throw new Error('approve failed');
-    toast('Approved — the figures have been added to the totals.');
-    await loadSummary();
+    if (!r.ok) {
+      // Surface what the server actually said rather than a generic message.
+      fail(payload.error || `Approve failed (HTTP ${r.status}).`);
+      btn.disabled = false;
+      btn.textContent = original;
+      return;
+    }
+
+    const added = Object.entries(payload.added || figures)
+      .map(([p, v]) => `${p} ${nf.format(v)}`).join(', ');
+    toast(`Approved — added to the totals: ${added}`, 12000);
+
+    await loadSummary({ fresh: true });
     refreshRow(code);
     // Reopen the panel so it redraws with the verified state.
     const tr = document.querySelector(`tr[data-code="${CSS.escape(code)}"]`);
     if (tr) { document.querySelectorAll('tr.detail').forEach((d) => d.remove()); toggleExtract(code, tr); }
-  } catch {
+  } catch (e) {
+    console.error('approve', e);
     btn.disabled = false;
-    btn.textContent = 'Approve these figures into the totals';
-    toast('Could not approve that photo. Please try again.');
+    btn.textContent = original;
+    fail('Could not reach the server. Nothing was changed — please try again.');
   }
 }
 
@@ -435,9 +456,14 @@ new IntersectionObserver((entries) => {
   if (entries[0].isIntersecting && DATA) renderMore();
 }, { rootMargin: '400px' }).observe($('#sentinel'));
 
-async function loadSummary() {
+/* /summary carries max-age=15 so ordinary page loads stay cheap. Straight after
+   an approve that cache is a liability: the browser can serve the pre-approve
+   copy and the totals look unchanged, which reads as "it didn't work". So a
+   post-mutation read explicitly bypasses it. */
+async function loadSummary({ fresh = false } = {}) {
   try {
-    SUMMARY = await (await fetch(`${API}/summary`)).json();
+    const url = fresh ? `${API}/summary?t=${Date.now()}` : `${API}/summary`;
+    SUMMARY = await (await fetch(url, fresh ? { cache: 'no-store' } : undefined)).json();
   } catch { /* totals stay as they were; the grid still works */ }
   renderTotals();
 }

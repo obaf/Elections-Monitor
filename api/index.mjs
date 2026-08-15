@@ -436,7 +436,13 @@ export const handler = async (event) => {
     }
 
     if (path.startsWith('/admin/')) {
-      if (!(await requireAdmin(event))) return json(401, { error: 'unauthorised' });
+      if (!(await requireAdmin(event))) {
+        console.log(`admin DENIED ${method} ${path} — bad or missing token`);
+        return json(401, { error: 'unauthorised' });
+      }
+      // Admin actions move public numbers. When one appears not to work there
+      // has to be a record of what was asked for and what came back.
+      console.log(`admin ${method} ${path} ${JSON.stringify(body).slice(0, 400)}`);
 
       if (method === 'GET' && path === '/admin/threads') {
         const threads = await query('THREADS');
@@ -473,8 +479,15 @@ export const handler = async (event) => {
       if (method === 'POST' && path === '/admin/approve') {
         const puCode = String(body.puCode || '');
         const uploadId = String(body.uploadId || '');
-        const uploads = (await query(`PU#${puCode}`)).filter((u) => u.uploadId === uploadId);
-        if (!uploads.length) return json(404, { error: 'upload not found' });
+        const all = (await query(`PU#${puCode}`)).filter((u) => u.sk?.startsWith('UPLOAD#'));
+        const uploads = all.filter((u) => u.uploadId === uploadId);
+        if (!uploads.length) {
+          console.log(`approve: uploadId ${uploadId} not under PU#${puCode}; ` +
+                      `have ${all.map((u) => u.uploadId).join(',') || 'none'}`);
+          return json(404, {
+            error: 'That photo is no longer listed for this polling unit. Reload the page and try again.',
+          });
+        }
         const cnt = await get('CNT', puCode);
         if (cnt?.v) return json(200, { ok: true, note: 'already counted' });
         // Approving after a revoke is a deliberate reversal and is allowed.
@@ -482,7 +495,10 @@ export const handler = async (event) => {
         const edited = sanitiseFigures(body.figures);
         const figures = edited || ocr;
         if (!Object.keys(figures).length) {
-          return json(400, { error: 'no figures to approve — enter at least one party and score' });
+          console.log(`approve: nothing usable. body.figures=${JSON.stringify(body.figures)} ocr=${JSON.stringify(ocr)}`);
+          return json(400, {
+            error: 'No usable figures. Every row needs a party name and a whole-number score.',
+          });
         }
         const reason = String(body.reason || '').slice(0, 500).trim();
         // An admin typing a party the OCR missed is the most reliable signal we
@@ -496,7 +512,11 @@ export const handler = async (event) => {
           edited: !!edited && JSON.stringify(edited) !== JSON.stringify(ocr),
           ocr,
         });
-        return json(200, { ok: true, added: figures });
+        const after = await get('AGG', 'TOTALS');
+        console.log(`approve OK ${puCode} added=${JSON.stringify(figures)} edited=${!!edited}`);
+        // Returning the new totals lets the page show the effect without a
+        // second read that a browser cache could answer staleley.
+        return json(200, { ok: true, added: figures, totals: after?.p || {} });
       }
 
       if (method === 'POST' && path === '/admin/revoke') {
