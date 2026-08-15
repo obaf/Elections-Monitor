@@ -84,7 +84,11 @@ body {
 .scroller { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
 .scroller table { border: 0; border-radius: 0; }
 .bd th, .bd td { white-space: nowrap; }
+/* A full ballot is a lot of columns, so keep the numeric ones tight and let
+   the table scroll sideways under a pinned polling unit name. */
+.bd th.num, .bd td.num { padding-left: 10px; padding-right: 10px; min-width: 54px; }
 .bd td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.bd th.num { text-align: right; }
 .bd tbody tr:hover td { background: #f9fafc; }
 .bd .pu { position: sticky; left: 0; background: var(--card); white-space: normal; min-width: 240px; }
 .bd tbody tr:hover .pu { background: #f9fafc; }

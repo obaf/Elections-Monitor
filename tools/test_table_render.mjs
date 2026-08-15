@@ -68,12 +68,13 @@ async function render({ admin }) {
     setTimeout, clearTimeout, Intl, Date, Object, Array, JSON, console, String, Number,
   };
 
-  const fn = new Function(...Object.keys(sandbox), script + '\n;return {head:document.querySelector("#head"),rows:document.querySelector("#rows"),foot:document.querySelector("#foot"),wd:document.querySelector("#withdrawn"),wdl:document.querySelector("#withdrawn-list")};');
+  const fn = new Function(...Object.keys(sandbox), script + '\n;return {head:document.querySelector("#head"),rows:document.querySelector("#rows"),foot:document.querySelector("#foot"),wd:document.querySelector("#withdrawn"),wdl:document.querySelector("#withdrawn-list"),intro:document.querySelector("#intro")};');
   const out = fn(...Object.values(sandbox));
   await new Promise((r) => setTimeout(r, 40));   // let load()'s promises settle
   return {
     head: out.head.innerHTML, rows: out.rows.innerHTML,
     foot: out.foot.innerHTML, wdHidden: out.wd.hidden, wdList: out.wdl.innerHTML,
+    intro: out.intro.innerHTML,
   };
 }
 
@@ -87,7 +88,8 @@ const check = (label, got, want) => {
 console.log('VISITOR view');
 const v = await render({ admin: false });
 const vCols = [...v.head.matchAll(/<th[^>]*>([^<]*)</g)].map((m) => m[1].trim());
-check('columns are the unit plus parties only', vCols.join('|'), 'Polling Unit Name|Accord|PDP|APC|LP');
+check('columns are the unit plus parties, alphabetical',
+  vCols.join('|'), 'Polling Unit Name|Accord|APC|LP|PDP');
 check('no Status column', /Status/.test(v.head), false);
 check('no Admin column', /Admin/.test(v.head), false);
 check('only counted units listed', (v.rows.match(/<tr /g) || []).length, 2);
@@ -110,6 +112,20 @@ check('revoke button on counted rows', (a.rows.match(/data-revoke=/g) || []).len
 check('status pills rendered', /pill-added/.test(a.rows) && /pill-revoked/.test(a.rows), true);
 const aFoot = [...a.foot.matchAll(/<td class="num">([^<]*)</g)].map((m) => m[1]);
 check('TOTAL unchanged by admin view', aFoot.slice(0, 4).join(','), '60,40,40,40');
+
+/* A real ballot carries far more parties than this sample, and they arrive at
+ * different times. New ones must slot into their alphabetical place rather than
+ * being appended, otherwise a column moves under the reader between loads. */
+console.log('\nMANY PARTIES — new arrivals slot into place, not onto the end');
+BREAKDOWN.rows[0].results = { ZLP: 3, ADC: 7, PDP: 20, APC: 20, Accord: 30, LP: 20, NNPP: 9, AA: 1 };
+const m = await render({ admin: false });
+const mCols = [...m.head.matchAll(/<th[^>]*>([^<]*)</g)].map((x) => x[1].trim());
+check('all parties present, alphabetical',
+  mCols.join('|'), 'Polling Unit Name|AA|Accord|ADC|APC|LP|NNPP|PDP|ZLP');
+check('wide-table hint shown', /scroll the table sideways/.test(m.intro), true);
+const mFoot = [...m.foot.matchAll(/<td class="num">([^<]*)</g)].map((x) => x[1]);
+// Unit 1 has all eight parties; unit 2 only the original four.
+check('TOTAL sums each column independently', mFoot.join(','), '1,60,7,40,40,9,40,3');
 
 console.log('\n' + (fails ? `${fails} FAILED` : 'ALL PASSED'));
 process.exit(fails ? 1 : 0);

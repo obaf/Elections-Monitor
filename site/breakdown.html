@@ -231,7 +231,13 @@ function describe() {
   }
   const bits = [`<strong>${added}</strong> polling unit${added === 1 ? '' : 's'} counted`];
   if (revoked) bits.push(`${revoked} withdrawn`);
-  $('#intro').innerHTML = bits.join(' · ') + '. Figures below are the results read from the uploaded photos.';
+  // With a full ballot the table is wider than any phone, so say so rather than
+  // leaving people to discover the hidden columns by accident.
+  const wide = PARTIES.length > 5
+    ? ` Parties run alphabetically across ${PARTIES.length} columns — scroll the table sideways to see them all.`
+    : ' Parties run in alphabetical order.';
+  $('#intro').innerHTML = bits.join(' · ') +
+    '. Figures below are the results read from the uploaded photos.' + wide;
 }
 
 async function load() {
@@ -243,14 +249,18 @@ async function load() {
   BD = {};
   for (const r of bd.rows || []) BD[r.puCode] = r;
 
-  // Columns ordered by size so the parties that matter read left to right. A
-  // revoked party only earns a column for admins, who can see those rows.
-  const sums = {};
+  // Fixed alphabetical order. A real election brings far more parties than any
+  // sample, and columns must not shuffle as figures arrive -- a party has to
+  // stay in the same place every time the page is loaded, so it can be found
+  // by position rather than hunted for.
+  const seen = new Set();
   for (const b of Object.values(BD)) {
-    for (const [p, v] of Object.entries(b.results || {})) sums[p] = (sums[p] || 0) + v;
-    if (isAdmin()) for (const p of Object.keys(b.revokedFigures || {})) sums[p] = sums[p] || 0;
+    for (const p of Object.keys(b.results || {})) seen.add(p);
+    // A revoked party only earns a column for admins, who can see those rows.
+    if (isAdmin()) for (const p of Object.keys(b.revokedFigures || {})) seen.add(p);
   }
-  PARTIES = Object.keys(sums).sort((a, b) => sums[b] - sums[a]);
+  PARTIES = [...seen].sort((a, b) =>
+    a.localeCompare(b, 'en', { sensitivity: 'base', numeric: true }));
 
   describe();
   withdrawn();
