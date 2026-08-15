@@ -113,7 +113,7 @@ function applyFilter() {
 
 const editRow = (party, votes) => `<tr>
   <td><input class="p-in" type="text" value="${esc(party)}" maxlength="12"
-             placeholder="PARTY" autocapitalize="characters"></td>
+             placeholder="PARTY" autocapitalize="characters" list="party-list"></td>
   <td><input class="v-in" type="number" min="0" step="1" value="${esc(votes)}" placeholder="0"></td>
   <td><button class="row-x" data-act="delrow" title="remove this party">&times;</button></td>
 </tr>`;
@@ -184,6 +184,7 @@ async function toggleExtract(code, tr) {
   row.className = 'detail';
   row.innerHTML = `<td colspan="4">Loading…</td>`;
   tr.after(row);
+  loadPartyList();
 
   let data;
   try {
@@ -437,6 +438,18 @@ async function loadSummary() {
     SUMMARY = await (await fetch(`${API}/summary`)).json();
   } catch { /* totals stay as they were; the grid still works */ }
   renderTotals();
+}
+
+/* The known-party set grows as sheets are read and as admins type corrections,
+   so the suggestion list is fetched rather than hardcoded -- a party learned
+   from yesterday's upload is offered today. */
+async function loadPartyList() {
+  if (!isAdmin() || $('#party-list').childElementCount) return;
+  try {
+    const { parties } = await (await fetch(`${API}/parties`)).json();
+    $('#party-list').innerHTML = (parties || [])
+      .map((p) => `<option value="${esc(p)}"></option>`).join('');
+  } catch { /* the field still accepts free text */ }
 }
 
 (async function init() {

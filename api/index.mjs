@@ -1,6 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 import { ddb, textract, ssm, s3Get, item, plain, av } from './aws.mjs';
-import { presignPut, readGps, inOsun, parseResults, signature, json } from './util.mjs';
+import { presignPut, readGps, inOsun, parseResults, signature, json, PARTIES } from './util.mjs';
 
 const TABLE = process.env.TABLE;
 const BUCKET = process.env.PHOTO_BUCKET;
@@ -176,6 +176,58 @@ async function addTotals(results) {
   }
 }
 
+/* ----------------------------- party registry ---------------------------- */
+
+/* The seed list in util.mjs cannot know every party on a real ballot, so the
+ * set grows: parties read off a sheet, and parties an admin types into the
+ * edit table, are both remembered. Once registered, a party is recognised on
+ * every later photo even when it appears alongside unfamiliar text. */
+let partyCache = { at: 0, set: null };
+
+async function knownParties() {
+  // Cached per container for a minute; a missed party is picked up on the next
+  // upload rather than costing a read on every request.
+  if (partyCache.set && Date.now() - partyCache.at < 60_000) return partyCache.set;
+  const rec = await get('AGG', 'PARTIES');
+  partyCache = { at: Date.now(), set: new Set(Object.keys(rec?.p || {})) };
+  return partyCache.set;
+}
+
+async function registerParties(codes) {
+  const fresh = [...new Set(codes)]
+    .map((c) => String(c).toUpperCase().replace(/[^A-Z0-9]/g, ''))
+    .filter((c) => c && c.length <= 12 && !PARTIES.includes(c));
+  if (!fresh.length) return [];
+
+  const known = await knownParties();
+  const add = fresh.filter((c) => !known.has(c));
+  if (!add.length) return [];
+
+  const ts = new Date().toISOString();
+  const sets = [], ean = { '#p': 'p' }, eav = { ':t': av(ts) };
+  add.forEach((c, i) => {
+    ean[`#k${i}`] = c;
+    sets.push(`#p.#k${i} = if_not_exists(#p.#k${i}, :t)`);
+  });
+  const args = {
+    TableName: TABLE,
+    Key: item({ pk: 'AGG', sk: 'PARTIES' }),
+    UpdateExpression: 'SET ' + sets.join(', '),
+    ExpressionAttributeNames: ean,
+    ExpressionAttributeValues: eav,
+  };
+  try {
+    await ddb('DynamoDB_20120810.UpdateItem', args);
+  } catch (e) {
+    // First write: the p map does not exist yet.
+    if (!/ValidationException/.test(String(e))) throw e;
+    await put({ pk: 'AGG', sk: 'PARTIES', p: {} });
+    await ddb('DynamoDB_20120810.UpdateItem', args);
+  }
+  partyCache = { at: 0, set: null };   // force a reload so the next parse sees them
+  return add;
+}
+
 /* ------------------------------ upload flow ------------------------------ */
 
 async function processUpload({ puCode, key, deviceId }) {
@@ -195,7 +247,12 @@ async function processUpload({ puCode, key, deviceId }) {
     lines = blocks.map((b) => b.text);
     // Geometry matters: the sheet is a table and each cell arrives as its own
     // line, so the score is found by position rather than by string proximity.
-    extracted = parseResults(blocks);
+    const discovered = new Set();
+    extracted = parseResults(blocks, { known: await knownParties(), discovered });
+    if (discovered.size) {
+      const added = await registerParties([...discovered]);
+      if (added.length) console.log('new parties learned from upload:', added.join(', '));
+    }
   } catch (e) {
     console.error('textract failed', String(e));
   }
@@ -324,6 +381,15 @@ export const handler = async (event) => {
       }, { 'cache-control': 'public, max-age=15' });
     }
 
+    // Feeds the admin edit table's suggestion list, so the growing set of
+    // parties is visible where the corrections are actually typed.
+    if (method === 'GET' && path === '/parties') {
+      const learned = await knownParties();
+      const all = [...new Set([...PARTIES, ...learned])]
+        .sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }));
+      return json(200, { parties: all }, { 'cache-control': 'public, max-age=60' });
+    }
+
     if (method === 'GET' && path === '/pu') {
       const code = String(qs.code || '').trim();
       const uploads = (await query(`PU#${code}`))
@@ -419,6 +485,9 @@ export const handler = async (event) => {
           return json(400, { error: 'no figures to approve — enter at least one party and score' });
         }
         const reason = String(body.reason || '').slice(0, 500).trim();
+        // An admin typing a party the OCR missed is the most reliable signal we
+        // get that it exists, so register it for every future photo.
+        await registerParties(Object.keys(figures));
         await addTotals(figures);
         await markCounted(puCode, figures);
         const cfg = await adminConfig();

@@ -146,10 +146,24 @@ export const inOsun = (gps) =>
 /* ---------------------------------------------------------------------------
  * Turn Textract lines into { PARTY: votes }.
  * ------------------------------------------------------------------------- */
+// Seed list only. The registry grows as new parties are seen on real sheets or
+// added by an admin, so this is a starting point rather than a closed set.
 export const PARTIES = [
   'A', 'AA', 'AAC', 'ADC', 'ADP', 'APC', 'APGA', 'APM', 'APP', 'BP', 'LP',
   'NNPP', 'NRM', 'PDP', 'PRP', 'SDP', 'YPP', 'ZLP', 'NCP', 'ANDP', 'YP', 'ACD',
+  'ACCORD', 'PRM', 'MRM', 'NPC', 'BNPP', 'ADA',
 ];
+
+// Short words that sit in the party column of a result sheet without being
+// parties. Discovery would otherwise invent a party out of a heading.
+export const NON_PARTY = new Set([
+  'PARTY', 'PARTIES', 'VOTE', 'VOTES', 'TOTAL', 'TOTALS', 'VALID', 'INVALID',
+  'REJECT', 'SPOILT', 'STATE', 'LGA', 'WARD', 'UNIT', 'UNITS', 'CODE', 'NAME',
+  'FORM', 'RESULT', 'INEC', 'PU', 'SN', 'NO', 'NUM', 'SCORE', 'SCORES', 'SUM',
+  'CAST', 'TURNOUT', 'DATE', 'TIME', 'PAGE', 'SERIAL', 'POLLING', 'OSUN',
+  'NIGERIA', 'SIGN', 'AGENT', 'AGENTS', 'REG', 'ACCRED', 'EC', 'EC8A', 'OF',
+  'AND', 'THE', 'IN', 'AT', 'BY', 'FOR', 'YES', 'NO',
+]);
 
 // OCR routinely reads O for 0, I/l for 1, S for 5 in the digit column.
 const digits = (s) =>
@@ -162,7 +176,13 @@ const digits = (s) =>
 // party and its score are matched by position: same row, score to the right.
 // Bare strings fall back to reading order, which is the sequence Textract
 // returns cells in anyway.
-export function parseResults(input) {
+export function parseResults(input, opts = {}) {
+  // opts.known    extra party codes learned since deploy
+  // opts.discovered  a Set the caller passes in to receive newly seen parties
+  const known = opts.known instanceof Set ? opts.known : new Set(opts.known || []);
+  const discovered = opts.discovered instanceof Set ? opts.discovered : null;
+  const isKnown = (c) => PARTIES.includes(c) || known.has(c);
+
   const items = (input || []).map((b) => {
     const text = typeof b === 'string' ? b : (b.text ?? b.Text ?? '');
     const box = typeof b === 'string' ? null : (b.box ?? b.Box ?? null);
@@ -171,8 +191,20 @@ export function parseResults(input) {
   }).filter((i) => i.clean);
 
   const partyOf = (it) => {
-    const t = it.tokens.find((x) => PARTIES.includes(x.replace(/[^A-Z]/g, '')));
+    const t = it.tokens.find((x) => isKnown(x.replace(/[^A-Z]/g, '')));
     return t ? t.replace(/[^A-Z]/g, '') : null;
+  };
+
+  /* A party nobody has registered yet. Deliberately strict: the cell must hold
+   * nothing but one short all-letters word, so a heading or a stray number
+   * cannot become a party. It is only accepted once it pairs with a score, and
+   * only on the cell-based passes -- never from a multi-word line. */
+  const candidateOf = (it) => {
+    if (it.tokens.length !== 1) return null;
+    const t = it.tokens[0];
+    if (!/^[A-Z]{2,7}$/.test(t)) return null;
+    if (NON_PARTY.has(t)) return null;
+    return t;
   };
 
   // A cell counts as a score only if it is *nothing but* a number, so
@@ -204,8 +236,11 @@ export function parseResults(input) {
   const centre = (b) => b.Top + b.Height / 2;
 
   items.forEach((it, i) => {
-    const code = partyOf(it);
+    const registered = partyOf(it);
+    const code = registered || candidateOf(it);
     if (!code || out[code] !== undefined) return;
+    // Only remember a brand new party once its score is actually found.
+    const learn = () => { if (!registered && discovered) discovered.add(code); };
 
     if (it.box) {
       let best = null;
@@ -218,15 +253,15 @@ export function parseResults(input) {
         if (!sameRow || other.box.Left <= it.box.Left) return;
         if (!best || other.box.Left < best.box.Left) best = { j, score, box: other.box };
       });
-      if (best) { record(code, best.score); used.add(best.j); return; }
+      if (best) { record(code, best.score); used.add(best.j); learn(); return; }
     }
 
     // No geometry: take the next unconsumed numeric cell in reading order.
     for (let j = i + 1; j < items.length; j++) {
       if (used.has(j)) continue;
-      if (partyOf(items[j])) break; // ran into the next party row
+      if (partyOf(items[j]) || candidateOf(items[j])) break; // next party row
       const score = scoreOf(items[j]);
-      if (score !== null) { record(code, score); used.add(j); return; }
+      if (score !== null) { record(code, score); used.add(j); learn(); return; }
     }
   });
 
