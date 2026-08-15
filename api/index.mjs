@@ -288,9 +288,11 @@ export const handler = async (event) => {
     if (method === 'GET' && path === '/breakdown') {
       const rows = await query('CNT');
       return json(200, {
+        // Upload counts are deliberately NOT here: they are admin-only, served
+        // by /admin/upload-counts. Leaking them on the public breakdown would
+        // defeat that.
         rows: rows.map((r) => ({
           puCode: r.sk,
-          uploads: r.n || 0,
           status: r.st || (r.v ? 'added' : 'pending'),
           results: r.res || {},
           // Shown publicly on a revoked unit: withdrawing a result from a public
@@ -410,6 +412,20 @@ export const handler = async (event) => {
         const cfg = await adminConfig();
         const r = await revokeCounted(puCode, reason, cfg.username);
         return json(r.ok ? 200 : 409, r);
+      }
+
+      // Every polling unit that has had at least one photo, counted or not.
+      if (method === 'GET' && path === '/admin/upload-counts') {
+        const rows = await query('CNT', { ProjectionExpression: 'sk, n, v, st' });
+        return json(200, {
+          rows: rows
+            .filter((r) => (r.n || 0) > 0)
+            .map((r) => ({
+              puCode: r.sk,
+              uploads: r.n || 0,
+              status: r.st || (r.v ? 'added' : 'pending'),
+            })),
+        });
       }
 
       if (method === 'GET' && path === '/admin/audit') {

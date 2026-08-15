@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Upload count — irev2.com</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE</span>
+  <a class="btn btn-small" href="/">← back to the portal</a>
+  <a class="btn btn-small" href="/breakdown.html">breakdown</a>
+  <button id="admin-login-btn" class="btn btn-small">admin login</button>
+  <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
+</div>
+
+<div class="page">
+  <h1>Upload count</h1>
+  <p class="muted" id="intro">Every polling unit that has had at least one photo uploaded,
+     whether or not the result has been added to the totals.</p>
+
+  <div id="gate" hidden>
+    <p class="login-err">This page is for admins only. Please log in.</p>
+  </div>
+
+  <div id="panel" hidden>
+    <div class="toolbar">
+      <label class="grow">
+        <span>Search polling unit or ward</span>
+        <input id="q" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
+      </label>
+    </div>
+
+    <div class="scroller">
+      <table class="bd">
+        <thead><tr>
+          <th class="pu">Polling Unit Name</th>
+          <th class="num">Photo uploads</th>
+          <th>Status</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+        <tfoot id="foot"></tfoot>
+      </table>
+    </div>
+    <p id="more" class="muted"></p>
+  </div>
+</div>
+
+<dialog id="login-dlg" class="dlg">
+  <h2>Admin login</h2>
+  <p class="muted">Upload counts are only visible to admins.</p>
+  <label class="fld"><span>Username</span>
+    <input id="admin-u" type="text" autocomplete="username"></label>
+  <label class="fld"><span>Password</span>
+    <input id="admin-p" type="password" autocomplete="current-password"></label>
+  <p id="login-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="admin-go" class="btn btn-primary">Log in</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script>
+const API = '/api';
+const BATCH = 150;
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nf = new Intl.NumberFormat('en-NG');
+
+let DATA = null;
+let COUNTS = {};          // puCode -> { uploads, status }
+let rows = [];
+let rendered = 0;
+let adminToken = sessionStorage.getItem('irev2-admin') || '';
+const isAdmin = () => !!adminToken;
+
+function toast(msg, ms = 6000) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+function label(st) {
+  if (st === 'added') return '<span class="pill pill-added">Added</span>';
+  if (st === 'revoked') return '<span class="pill pill-revoked">Revoked</span>';
+  return '<span class="pill pill-none">Not added yet</span>';
+}
+
+function rowHtml(pu) {
+  const [code, name] = pu;
+  const c = COUNTS[code];
+  return `<tr>
+    <td class="pu"><strong>${esc(name)}</strong><br><span class="pu-code">${esc(code)}</span></td>
+    <td class="num">${nf.format(c.uploads)}</td>
+    <td>${label(c.status)}</td>
+  </tr>`;
+}
+
+function renderMore() {
+  const slice = rows.slice(rendered, rendered + BATCH);
+  if (!slice.length) { $('#more').textContent = ''; return; }
+  $('#rows').insertAdjacentHTML('beforeend', slice.map(rowHtml).join(''));
+  rendered += slice.length;
+  $('#more').textContent = rendered < rows.length
+    ? `Showing ${nf.format(rendered)} of ${nf.format(rows.length)} — scroll for more` : '';
+}
+
+function build() {
+  const q = $('#q').value.trim().toUpperCase();
+  rows = DATA.pus.filter(([code, name, wi]) => {
+    if (!COUNTS[code]) return false;
+    if (!q) return true;
+    return name.toUpperCase().includes(q) || code.includes(q) ||
+           DATA.wards[wi][0].toUpperCase().includes(q);
+  });
+  // Most-uploaded first: that is the list an admin is actually scanning for.
+  rows.sort((a, b) => COUNTS[b[0]].uploads - COUNTS[a[0]].uploads);
+
+  rendered = 0;
+  $('#rows').innerHTML = '';
+  renderMore();
+
+  const units = rows.length;
+  const photos = rows.reduce((n, [code]) => n + COUNTS[code].uploads, 0);
+  $('#foot').innerHTML = units
+    ? `<tr><td class="pu">TOTAL — ${nf.format(units)} polling unit${units === 1 ? '' : 's'}</td>
+        <td class="num">${nf.format(photos)}</td><td></td></tr>`
+    : '';
+  if (!units) {
+    $('#rows').innerHTML = `<tr><td class="pu" colspan="3"><span class="muted">${
+      q ? 'No polling unit matches that search.' : 'No photos have been uploaded yet.'}</span></td></tr>`;
+  }
+}
+
+async function load() {
+  const r = await fetch(`${API}/admin/upload-counts`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (r.status === 401) {
+    adminToken = ''; sessionStorage.removeItem('irev2-admin');
+    refreshAdminUi();
+    toast('Your admin session expired. Please log in again.');
+    return;
+  }
+  if (!r.ok) { $('#intro').textContent = 'Could not load upload counts.'; return; }
+
+  const [units, data] = await Promise.all([
+    DATA ? Promise.resolve(DATA) : fetch('/polling-units.json').then((x) => x.json()),
+    Promise.resolve(await r.json()),
+  ]);
+  DATA = units;
+  COUNTS = {};
+  for (const row of data.rows || []) COUNTS[row.puCode] = row;
+  build();
+}
+
+function refreshAdminUi() {
+  $('#admin-flag').hidden = !isAdmin();
+  $('#admin-login-btn').hidden = isAdmin();
+  $('#admin-logout-btn').hidden = !isAdmin();
+  $('#panel').hidden = !isAdmin();
+  $('#gate').hidden = isAdmin();
+}
+
+$('#admin-login-btn').addEventListener('click', () => {
+  $('#login-err').hidden = true;
+  $('#login-dlg').showModal();
+});
+
+$('#admin-logout-btn').addEventListener('click', () => {
+  adminToken = ''; sessionStorage.removeItem('irev2-admin');
+  refreshAdminUi();
+  toast('Logged out of admin.');
+});
+
+$('#admin-go').addEventListener('click', async () => {
+  const err = $('#login-err');
+  err.hidden = true;
+  try {
+    const r = await fetch(`${API}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: $('#admin-u').value, password: $('#admin-p').value }),
+    });
+    if (!r.ok) { err.textContent = 'Invalid username or password.'; err.hidden = false; return; }
+    adminToken = (await r.json()).token;
+    sessionStorage.setItem('irev2-admin', adminToken);
+    $('#admin-p').value = '';
+    $('#login-dlg').close();
+    refreshAdminUi();
+    await load();
+  } catch {
+    err.textContent = 'Could not reach the server. Please try again.';
+    err.hidden = false;
+  }
+});
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) e.target.closest('dialog')?.close();
+});
+
+let debounce;
+$('#q').addEventListener('input', () => {
+  clearTimeout(debounce); debounce = setTimeout(build, 140);
+});
+
+refreshAdminUi();
+if (isAdmin()) load().catch(() => { $('#intro').textContent = 'Could not load upload counts.'; });
+</script>
+</body>
+</html>
