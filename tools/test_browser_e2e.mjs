@@ -109,7 +109,14 @@ const label = await page.textContent('tr.detail button[data-act="approve"]');
 check('button label matches the report', label.trim() === 'Approve these figures into the totals', label.trim());
 await page.click('tr.detail button[data-act="approve"]');
 
-await page.waitForSelector('#toast:visible', { timeout: 25000 });
+// The login toast may still be on screen; wait for the text to actually change
+// rather than reading whatever happens to be showing.
+const priorToast = await page.evaluate(() =>
+  document.querySelector('#toast').hidden ? '' : document.querySelector('#toast').textContent.trim());
+await page.waitForFunction((prev) => {
+  const t = document.querySelector('#toast');
+  return !t.hidden && t.textContent.trim() !== prev;
+}, priorToast, { timeout: 30000 });
 const toast = (await page.textContent('#toast')).trim();
 console.log(`   toast: "${toast}"`);
 check('toast reports success', /^Approved/.test(toast));

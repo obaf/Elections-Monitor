@@ -157,12 +157,28 @@ function adminBox(u, counted, code) {
 function collectFigures(uploadId) {
   const tbl = document.querySelector(`[data-edit="${CSS.escape(uploadId)}"]`);
   if (!tbl) return { error: 'Could not read the table.' };
+
+  /* Scope to this table's OWN body rows.
+   *
+   * `tbl.querySelectorAll('tbody tr')` looks equivalent and is not: a
+   * descendant combinator is resolved against the whole document, not against
+   * tbl. This table is rendered inside the main grid's <tbody id="rows">, so
+   * that selector also matched this table's <thead> row -- whose cells are
+   * <th> with no inputs. Reading .value off null threw before any request was
+   * sent, so approving appeared to do nothing at all, silently. */
+  const bodyRows = tbl.tBodies?.length
+    ? [...tbl.tBodies[0].rows]
+    : [...tbl.querySelectorAll(':scope > tbody > tr')];
+
   const figures = {};
-  for (const tr of tbl.querySelectorAll('tbody tr')) {
-    const party = tr.querySelector('.p-in').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  for (const tr of bodyRows) {
+    const pIn = tr.querySelector('.p-in');
+    const vIn = tr.querySelector('.v-in');
+    if (!pIn || !vIn) continue;            // not an editable row; never throw here
+    const party = pIn.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
     // Thousands separators and stray spaces are how people actually type
     // figures off a sheet, so accept them instead of rejecting the row.
-    const raw = tr.querySelector('.v-in').value.trim().replace(/[,\s]/g, '');
+    const raw = vIn.value.trim().replace(/[,\s]/g, '');
     if (!party && raw === '') continue;                       // blank row, ignore
     if (!party) return { error: 'Every row needs a party name.' };
     if (raw === '') return { error: `Enter a score for ${party} — digits only.` };
@@ -338,7 +354,16 @@ async function approve(code, uploadId, btn) {
     toast(msg, 10000);
   };
 
-  const { figures, error } = collectFigures(uploadId);
+  // Wrapped: this ran outside the try below, so an unexpected throw in here
+  // became an unhandled rejection -- the button did nothing and said nothing.
+  let figures, error;
+  try {
+    ({ figures, error } = collectFigures(uploadId));
+  } catch (e) {
+    console.error('collectFigures', e);
+    fail(`Could not read the figures table (${e.message}). Please reload and try again.`);
+    return;
+  }
   if (error) { fail(error); return; }
   if (err) err.hidden = true;
 
