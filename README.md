@@ -1,28 +1,68 @@
-# Elections Monitor — irev2.com
+# Osun Election Monitoring Portal — irev2.com
 
-Terraform-managed "Under construction" static site for **irev2.com**, deployed
-automatically to AWS on every push to `main`.
+Citizens photograph polling unit result sheets; the portal reads the figures off
+the photo and adds them to a public running total once two independent phones
+agree. Deployed to AWS on every push to `main`.
 
 ```
 Route 53 (A/AAAA alias, apex + www)
       │
 CloudFront ──── ACM certificate (us-east-1), TLS 1.2+, HTTP→HTTPS
-      │  Origin Access Control (SigV4)
-      ▼
-Private S3 bucket (no public access)
+   │    │    │
+   │    │    └── /photos/*  ──► private S3 photo bucket   (cached hard)
+   │    └─────── /api/*     ──► HTTP API ──► Lambda ──► DynamoDB
+   └──────────── /*         ──► private S3 site bucket   (Origin Access Control)
+                                  └── polling-units.json (all 3,763 units)
 ```
 
 GitHub Actions authenticates to AWS with **OIDC short-lived tokens**. No AWS
 access keys are stored in GitHub.
 
+## How a result becomes a total
+
+1. The phone requests a presigned URL and uploads the photo straight to S3 —
+   the bytes never pass through the API.
+2. The Lambda reads **EXIF GPS from the photo itself** and checks the
+   coordinates fall inside Osun State. A client-supplied coordinate is not
+   trusted, since the whole eligibility rule rests on this.
+3. Textract reads the sheet; the party figures are parsed out of the lines.
+4. When two photos for the same polling unit **agree exactly** and come from
+   **two different devices**, both carrying Osun coordinates, the figures are
+   added to the totals — once. Anything short of that is accepted and stored,
+   but not counted.
+5. The admin can override and approve a photo by hand.
+
+## Cost shape
+
+Uploads and viewing are the volume, so both avoid per-request compute:
+the polling unit list is one edge-cached static JSON, photos are immutable and
+cache hard at CloudFront, and the photo bucket moves objects to STANDARD_IA
+after 30 days. DynamoDB is on-demand and Lambda scales to zero, so an idle
+portal costs essentially nothing. Textract runs exactly once per photo.
+
 ## Layout
 
 | Path | Purpose |
 |---|---|
-| [site/](site/) | The static content that gets published |
-| [infra/](infra/) | S3 + CloudFront + ACM + Route 53 — applied by CI |
+| [site/](site/) | Front page, admin console, message thread — static, no build step |
+| [api/](api/) | The API Lambda. Dependency-free: SigV4 is signed by hand so CI needs no `npm install` |
+| [infra/](infra/) | S3 + CloudFront + ACM + Route 53 + DynamoDB + Lambda — applied by CI |
 | [bootstrap/](bootstrap/) | One-time setup: state bucket, OIDC provider, deploy role |
+| [tools/](tools/) | Generates and uploads geotagged sample result sheets |
 | [.github/workflows/deploy.yml](.github/workflows/deploy.yml) | The pipeline |
+
+## Admin
+
+`https://irev2.com/admin.html`. Credentials are generated once and written to
+`admin user and pwd.txt` (gitignored); only a salted SHA-256 hash is stored, in
+SSM Parameter Store at `/irev2/admin`, which the Lambda reads at runtime. The
+password is not in the repo or in Terraform state.
+
+## Regenerating the polling unit list
+
+`site/polling-units.json` is derived from `osun-polling-units.csv` (gitignored).
+Ward and LGA names are de-duplicated into index arrays to keep the payload at
+194 KB, roughly 35 KB over the wire.
 
 ## One-time setup
 

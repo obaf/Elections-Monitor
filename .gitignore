@@ -44,3 +44,6 @@ osun-polling-units.csv
 
 # Lambda build artefact
 infra/.build/
+
+# Generated sample photos
+tools/seed/

@@ -271,6 +271,7 @@ data "aws_iam_policy_document" "deploy" {
       "lambda:GetFunction",
       "lambda:GetFunctionConfiguration",
       "lambda:GetFunctionCodeSigningConfig",
+      "lambda:GetRuntimeManagementConfig",
       "lambda:UpdateFunctionCode",
       "lambda:UpdateFunctionConfiguration",
       "lambda:ListVersionsByFunction",
@@ -284,13 +285,29 @@ data "aws_iam_policy_document" "deploy" {
     resources = ["arn:aws:lambda:*:${local.account_id}:function:${local.domain_slug}-api"]
   }
 
-  # API Gateway's control plane does not support resource-level scoping on
-  # creation, so this is granted on the account's apigateway namespace.
+  # API Gateway's control plane addresses resources by URL path, and tagging
+  # goes through a separate /tags/<encoded-arn> path rather than the API's own,
+  # so both shapes have to be listed.
   statement {
-    sid       = "ApiGateway"
+    sid     = "ApiGateway"
+    effect  = "Allow"
+    actions = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
+    resources = [
+      "arn:aws:apigateway:*::/apis",
+      "arn:aws:apigateway:*::/apis/*",
+      "arn:aws:apigateway:*::/v2/apis",
+      "arn:aws:apigateway:*::/v2/apis/*",
+      "arn:aws:apigateway:*::/tags/*",
+    ]
+  }
+
+  # DescribeLogGroups is a list operation: it authorises against an empty
+  # log-group ARN, so it cannot be scoped to one group.
+  statement {
+    sid       = "LogGroupDiscovery"
     effect    = "Allow"
-    actions   = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
-    resources = ["arn:aws:apigateway:*::/apis", "arn:aws:apigateway:*::/apis/*"]
+    actions   = ["logs:DescribeLogGroups"]
+    resources = ["*"]
   }
 
   statement {
@@ -299,7 +316,6 @@ data "aws_iam_policy_document" "deploy" {
     actions = [
       "logs:CreateLogGroup",
       "logs:DeleteLogGroup",
-      "logs:DescribeLogGroups",
       "logs:PutRetentionPolicy",
       "logs:TagResource",
       "logs:UntagResource",
@@ -360,6 +376,8 @@ data "aws_iam_policy_document" "deploy" {
       "cloudfront:ListCachePolicies",
       "cloudfront:GetResponseHeadersPolicy",
       "cloudfront:ListResponseHeadersPolicies",
+      "cloudfront:GetOriginRequestPolicy",
+      "cloudfront:ListOriginRequestPolicies",
       "cloudfront:CreateInvalidation",
       "cloudfront:GetInvalidation",
       "cloudfront:ListInvalidations",
