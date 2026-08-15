@@ -9,15 +9,50 @@
 <body>
 
 <div class="topbar">
-  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE — you can revoke an added result</span>
+  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE — status and revoke columns are shown</span>
   <a class="btn btn-small" href="/">← back to the portal</a>
   <button id="admin-login-btn" class="btn btn-small">admin login</button>
   <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
 </div>
 
+<div class="page wide">
+  <h1>Breakdown of results</h1>
+  <p class="muted" id="intro">Loading…</p>
+
+  <div class="toolbar">
+    <label class="grow">
+      <span>Search polling unit or ward</span>
+      <input id="q" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
+    </label>
+    <label class="chk" id="all-wrap" hidden>
+      <input id="show-all" type="checkbox">
+      Show every polling unit
+    </label>
+    <button id="audit-btn" class="btn" hidden>View audit log</button>
+  </div>
+
+  <div id="audit" class="audit" hidden></div>
+
+  <div class="scroller">
+    <table class="bd">
+      <thead><tr id="head"></tr></thead>
+      <tbody id="rows"></tbody>
+      <tfoot id="foot"></tfoot>
+    </table>
+  </div>
+  <div id="sentinel"></div>
+  <p id="more" class="muted"></p>
+
+  <section id="withdrawn" hidden>
+    <h2 class="wd-h">Withdrawn results</h2>
+    <p class="muted">These results were added and later removed from the totals by an admin.</p>
+    <div id="withdrawn-list"></div>
+  </section>
+</div>
+
 <dialog id="login-dlg" class="dlg">
   <h2>Admin login</h2>
-  <p class="muted">Log in to revoke a result that has been added.</p>
+  <p class="muted">Log in to see per-unit status and revoke a result.</p>
   <label class="fld"><span>Username</span>
     <input id="admin-u" type="text" autocomplete="username"></label>
   <label class="fld"><span>Password</span>
@@ -42,35 +77,6 @@
   </div>
 </dialog>
 
-<div class="page wide">
-  <h1>Breakdown of results added to the totals</h1>
-  <p class="muted" id="intro">Loading…</p>
-
-  <div class="toolbar">
-    <label class="grow">
-      <span>Search polling unit or ward</span>
-      <input id="q" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
-    </label>
-    <label class="chk">
-      <input id="show-all" type="checkbox">
-      Show every polling unit, including those with no photos
-    </label>
-    <button id="audit-btn" class="btn" hidden>View audit log</button>
-  </div>
-
-  <div id="audit" class="audit" hidden></div>
-
-  <div class="scroller">
-    <table class="bd">
-      <thead><tr id="head"></tr></thead>
-      <tbody id="rows"></tbody>
-      <tfoot id="foot"></tfoot>
-    </table>
-  </div>
-  <div id="sentinel"></div>
-  <p id="more" class="muted"></p>
-</div>
-
 <div id="toast" class="toast" hidden></div>
 
 <script>
@@ -81,7 +87,7 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;',
 const nf = new Intl.NumberFormat('en-NG');
 
 let DATA = null;          // polling-units.json
-let BD = {};              // puCode -> { uploads, status, results }
+let BD = {};              // puCode -> { uploads, status, results, reason, revokedFigures }
 let PARTIES = [];         // column order
 let rows = [];
 let rendered = 0;
@@ -95,8 +101,8 @@ function toast(msg, ms = 6000) {
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-/* Status is derived, not stored twice: a unit with no counter row has simply
-   never had a photo, which reads the same as "not added yet". */
+const nameOf = (code) => DATA?.pus.find((p) => p[0] === code)?.[1] || code;
+
 function statusOf(code) {
   const st = BD[code]?.status;
   if (st === 'added') return { key: 'added', label: 'Added' };
@@ -104,11 +110,15 @@ function statusOf(code) {
   return { key: 'none', label: 'Not added yet' };
 }
 
+/* ------------------------------- the table ------------------------------- */
+
+/* For an ordinary visitor this is purely the tabulation: polling units down
+   the side, parties across the top, totals underneath. Status and revoke are
+   admin concerns and would only be noise in a public results table. */
 function head() {
   const cols = ['<th class="pu">Polling Unit Name</th>']
     .concat(PARTIES.map((p) => `<th class="num">${esc(p)}</th>`));
-  cols.push('<th>Status</th>');
-  if (isAdmin()) cols.push('<th>Admin</th>');
+  if (isAdmin()) cols.push('<th>Status</th>', '<th>Admin</th>');
   $('#head').innerHTML = cols.join('');
 }
 
@@ -116,10 +126,7 @@ function rowHtml(pu) {
   const [code, name] = pu;
   const bd = BD[code];
   const res = (bd?.status === 'added' && bd.results) ? bd.results : null;
-  // A revoked unit still shows what it used to contribute, struck through, so
-  // the withdrawal is legible rather than the row just going blank.
   const gone = bd?.status === 'revoked' ? (bd.revokedFigures || {}) : null;
-  const st = statusOf(code);
 
   const cells = PARTIES.map((p) => {
     if (res && res[p] !== undefined) return `<td class="num">${nf.format(res[p])}</td>`;
@@ -127,36 +134,34 @@ function rowHtml(pu) {
     return '<td class="num"></td>';
   });
 
-  const why = (st.key === 'revoked' && bd?.reason)
-    ? `<div class="why">“${esc(bd.reason)}”${bd.revokedAt
-        ? `<br><span class="pu-code">${new Date(bd.revokedAt).toLocaleString()}</span>` : ''}</div>`
-    : '';
-
-  let admin = '';
+  let extra = '';
   if (isAdmin()) {
-    admin = st.key === 'added'
-      ? `<td><button class="btn btn-small btn-revoke" data-revoke="${esc(code)}">Revoke</button></td>`
-      : `<td><span class="muted">—</span></td>`;
+    const st = statusOf(code);
+    const why = (st.key === 'revoked' && bd?.reason) ? `<div class="why">“${esc(bd.reason)}”</div>` : '';
+    extra = `<td><span class="pill pill-${st.key}">${st.label}</span>${why}</td>` +
+      (st.key === 'added'
+        ? `<td><button class="btn btn-small btn-revoke" data-revoke="${esc(code)}">Revoke</button></td>`
+        : '<td><span class="muted">—</span></td>');
   }
 
   return `<tr data-code="${esc(code)}">
     <td class="pu"><strong>${esc(name)}</strong><br><span class="pu-code">${esc(code)}</span></td>
-    ${cells.join('')}
-    <td><span class="pill pill-${st.key}">${st.label}</span>${why}</td>
-    ${admin}
+    ${cells.join('')}${extra}
   </tr>`;
 }
 
+// TOTAL counts only what is currently added, so it always reconciles with the
+// figure on the front page.
 function foot() {
   if (!PARTIES.length) { $('#foot').innerHTML = ''; return; }
   const totals = {};
-  for (const [code, bd] of Object.entries(BD)) {
+  for (const bd of Object.values(BD)) {
     if (bd.status !== 'added') continue;
     for (const [p, v] of Object.entries(bd.results || {})) totals[p] = (totals[p] || 0) + v;
   }
   const cells = PARTIES.map((p) => `<td class="num">${nf.format(totals[p] || 0)}</td>`);
-  const extra = isAdmin() ? '<td></td><td></td>' : '<td></td>';
-  $('#foot').innerHTML = `<tr><td class="pu">TOTAL</td>${cells.join('')}${extra}</tr>`;
+  const pad = isAdmin() ? '<td></td><td></td>' : '';
+  $('#foot').innerHTML = `<tr><td class="pu">TOTAL</td>${cells.join('')}${pad}</tr>`;
 }
 
 function renderMore() {
@@ -170,10 +175,16 @@ function renderMore() {
 
 function build() {
   const q = $('#q').value.trim().toUpperCase();
-  const all = $('#show-all').checked;
+  const all = isAdmin() && $('#show-all').checked;
 
   rows = DATA.pus.filter(([code, name, wi]) => {
-    if (!all && !BD[code]) return false;          // no photos, nothing to show
+    if (!all) {
+      const st = BD[code]?.status;
+      // The public table is the tabulation of counted results. Admins also see
+      // units that have photos but no counted result yet.
+      const shown = isAdmin() ? !!BD[code] : st === 'added';
+      if (!shown) return false;
+    }
     if (!q) return true;
     return name.toUpperCase().includes(q) || code.includes(q) ||
            DATA.wards[wi][0].toUpperCase().includes(q);
@@ -184,17 +195,43 @@ function build() {
   head();
   foot();
   renderMore();
+  if (!rows.length) {
+    $('#rows').innerHTML = `<tr><td class="pu" colspan="${PARTIES.length + 1 + (isAdmin() ? 2 : 0)}">
+      <span class="muted">${q ? 'No polling unit matches that search.'
+        : 'No results have been added to the totals yet.'}</span></td></tr>`;
+  }
+}
+
+/* Revoked units are kept out of the tabulation -- they are not part of the
+   count -- but listed underneath, so a withdrawal stays publicly visible
+   rather than vanishing from the page. */
+function withdrawn() {
+  const list = Object.entries(BD).filter(([, b]) => b.status === 'revoked');
+  $('#withdrawn').hidden = !list.length;
+  if (!list.length) return;
+  $('#withdrawn-list').innerHTML = list.map(([code, b]) => {
+    const figs = Object.entries(b.revokedFigures || {}).sort((a, c) => c[1] - a[1])
+      .map(([p, v]) => `${esc(p)} ${nf.format(v)}`).join(' · ');
+    return `<div class="wd-row">
+      <div><strong>${esc(nameOf(code))}</strong> <span class="pu-code">${esc(code)}</span>
+        ${figs ? `<div class="pu-code">${figs}</div>` : ''}
+        ${b.reason ? `<div class="why">“${esc(b.reason)}”</div>` : ''}
+        ${b.revokedAt ? `<div class="pu-code">${new Date(b.revokedAt).toLocaleString()}</div>` : ''}
+      </div></div>`;
+  }).join('');
 }
 
 function describe() {
   const added = Object.values(BD).filter((b) => b.status === 'added').length;
   const revoked = Object.values(BD).filter((b) => b.status === 'revoked').length;
-  const pending = Object.values(BD).filter((b) => b.status !== 'added' && b.status !== 'revoked').length;
-  $('#intro').innerHTML = PARTIES.length || added
-    ? `<strong>${added}</strong> polling unit${added === 1 ? '' : 's'} added to the totals · ` +
-      `${revoked} revoked · ${pending} with photos but not yet added.`
-    : 'No results have been added to the totals yet. A polling unit appears here once ' +
-      'two matching photos from two different phones are uploaded, or once an admin approves one.';
+  if (!added && !revoked) {
+    $('#intro').textContent = 'No results have been added to the totals yet. A polling unit appears ' +
+      'here once two matching photos from two different phones are uploaded, or once an admin approves one.';
+    return;
+  }
+  const bits = [`<strong>${added}</strong> polling unit${added === 1 ? '' : 's'} counted`];
+  if (revoked) bits.push(`${revoked} withdrawn`);
+  $('#intro').innerHTML = bits.join(' · ') + '. Figures below are the results read from the uploaded photos.';
 }
 
 async function load() {
@@ -206,17 +243,17 @@ async function load() {
   BD = {};
   for (const r of bd.rows || []) BD[r.puCode] = r;
 
-  // Columns ordered by size, so the parties that matter read left to right.
+  // Columns ordered by size so the parties that matter read left to right. A
+  // revoked party only earns a column for admins, who can see those rows.
   const sums = {};
   for (const b of Object.values(BD)) {
     for (const [p, v] of Object.entries(b.results || {})) sums[p] = (sums[p] || 0) + v;
-    // Revoked figures earn a column too, otherwise a struck-through row would
-    // have nowhere to display and the withdrawal would be invisible.
-    for (const p of Object.keys(b.revokedFigures || {})) sums[p] = sums[p] || 0;
+    if (isAdmin()) for (const p of Object.keys(b.revokedFigures || {})) sums[p] = sums[p] || 0;
   }
   PARTIES = Object.keys(sums).sort((a, b) => sums[b] - sums[a]);
 
   describe();
+  withdrawn();
   build();
 }
 
@@ -227,12 +264,24 @@ function refreshAdminUi() {
   $('#admin-login-btn').hidden = isAdmin();
   $('#admin-logout-btn').hidden = !isAdmin();
   $('#audit-btn').hidden = !isAdmin();
-  if (!isAdmin()) { $('#audit').hidden = true; $('#audit-btn').textContent = 'View audit log'; }
+  $('#all-wrap').hidden = !isAdmin();
+  if (!isAdmin()) {
+    $('#audit').hidden = true;
+    $('#audit-btn').textContent = 'View audit log';
+    $('#show-all').checked = false;
+  }
 }
 
 $('#admin-login-btn').addEventListener('click', () => {
   $('#login-err').hidden = true;
   $('#login-dlg').showModal();
+});
+
+$('#admin-logout-btn').addEventListener('click', async () => {
+  adminToken = ''; sessionStorage.removeItem('irev2-admin');
+  refreshAdminUi();
+  await load();
+  toast('Logged out of admin.');
 });
 
 $('#admin-go').addEventListener('click', async () => {
@@ -250,32 +299,22 @@ $('#admin-go').addEventListener('click', async () => {
     $('#admin-p').value = '';
     $('#login-dlg').close();
     refreshAdminUi();
-    build();
-    toast('Logged in as admin. You can now revoke an added result.');
+    await load();
+    toast('Logged in as admin.');
   } catch {
     err.textContent = 'Could not reach the server. Please try again.';
     err.hidden = false;
   }
 });
 
-document.addEventListener('click', (e) => {
-  if (e.target.closest('[data-close]')) e.target.closest('dialog')?.close();
-});
-
-$('#admin-logout-btn').addEventListener('click', () => {
-  adminToken = ''; sessionStorage.removeItem('irev2-admin');
-  refreshAdminUi(); build();
-  toast('Logged out of admin.');
-});
-
 let revokeTarget = null;
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) { e.target.closest('dialog')?.close(); return; }
   const btn = e.target.closest('[data-revoke]');
   if (!btn) return;
   revokeTarget = btn.dataset.revoke;
-  const name = DATA.pus.find((p) => p[0] === revokeTarget)?.[1] || revokeTarget;
-  $('#revoke-pu').textContent = `${name} · ${revokeTarget}`;
+  $('#revoke-pu').textContent = `${nameOf(revokeTarget)} · ${revokeTarget}`;
   $('#revoke-reason').value = '';
   $('#revoke-err').hidden = true;
   $('#revoke-dlg').showModal();
@@ -299,7 +338,7 @@ $('#revoke-go').addEventListener('click', async () => {
     });
     if (r.status === 401) {
       adminToken = ''; sessionStorage.removeItem('irev2-admin');
-      $('#revoke-dlg').close(); refreshAdminUi(); build();
+      $('#revoke-dlg').close(); refreshAdminUi(); await load();
       toast('Your admin session expired. Please log in again.');
       return;
     }
@@ -325,13 +364,12 @@ async function loadAudit() {
   const { entries } = await r.json();
   if (!entries.length) { box.innerHTML = '<p class="muted">No approvals or revocations recorded yet.</p>'; return; }
   box.innerHTML = '<h2>Audit log</h2>' + entries.map((e) => {
-    const name = DATA.pus.find((p) => p[0] === e.puCode)?.[1] || e.puCode;
     const figs = Object.entries(e.figures || {}).sort((a, b) => b[1] - a[1])
       .map(([p, v]) => `${esc(p)} ${nf.format(v)}`).join(' · ');
     return `<div class="audit-row">
       <span class="pill pill-${e.action === 'revoke' ? 'revoked' : 'added'}">${esc(e.action)}</span>
       <div>
-        <strong>${esc(name)}</strong> <span class="pu-code">${esc(e.puCode)}</span><br>
+        <strong>${esc(nameOf(e.puCode))}</strong> <span class="pu-code">${esc(e.puCode)}</span><br>
         <span class="pu-code">${new Date(e.ts).toLocaleString()} · by ${esc(e.actor)}</span>
         ${e.reason ? `<div class="why">“${esc(e.reason)}”</div>` : ''}
         ${figs ? `<div class="pu-code">${figs}</div>` : ''}
