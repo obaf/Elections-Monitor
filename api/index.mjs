@@ -73,13 +73,36 @@ async function bumpCount(puCode, counted) {
   });
 }
 
-async function markCounted(puCode) {
+// The figures actually applied are snapshotted onto the counter item, so a
+// later revoke subtracts exactly what was added rather than re-deriving it
+// from the photos (which an admin may since have approved differently).
+async function markCounted(puCode, results) {
   await ddb('DynamoDB_20120810.UpdateItem', {
     TableName: TABLE,
     Key: item({ pk: 'CNT', sk: puCode }),
-    UpdateExpression: 'SET v = :one, n = if_not_exists(n, :z)',
-    ExpressionAttributeValues: item({ ':one': 1, ':z': 0 }),
+    UpdateExpression: 'SET v = :one, n = if_not_exists(n, :z), st = :added, res = :r',
+    ExpressionAttributeValues: item({ ':one': 1, ':z': 0, ':added': 'added', ':r': results || {} }),
   });
+}
+
+// Subtracts the snapshot back out and records the decision. Kept as a distinct
+// state rather than deleting the row, so the totals page can show that a
+// result was deliberately withdrawn instead of never having arrived.
+async function revokeCounted(puCode) {
+  const cnt = await get('CNT', puCode);
+  if (!cnt || !cnt.v) return { ok: false, reason: 'not currently added' };
+
+  const applied = cnt.res || {};
+  const negated = Object.fromEntries(Object.entries(applied).map(([k, v]) => [k, -v]));
+  await addTotals(negated);
+
+  await ddb('DynamoDB_20120810.UpdateItem', {
+    TableName: TABLE,
+    Key: item({ pk: 'CNT', sk: puCode }),
+    UpdateExpression: 'SET v = :zero, st = :revoked REMOVE res',
+    ExpressionAttributeValues: item({ ':zero': 0, ':revoked': 'revoked' }),
+  });
+  return { ok: true, removed: applied };
 }
 
 // Totals live in one item as a party -> votes map, updated with an additive
@@ -164,6 +187,9 @@ async function processUpload({ puCode, key, deviceId }) {
 async function tryVerify(puCode) {
   const cnt = await get('CNT', puCode);
   if (cnt?.v) return true;
+  // A revoked result stays revoked: the admin made a judgement, and a further
+  // matching photo must not silently undo it. Re-approval is explicit.
+  if (cnt?.st === 'revoked') return false;
 
   const uploads = (await query(`PU#${puCode}`)).filter((u) => u.sk?.startsWith('UPLOAD#'));
   const eligible = uploads.filter((u) => u.inOsun && u.sig && Object.keys(u.extracted || {}).length);
@@ -173,7 +199,7 @@ async function tryVerify(puCode) {
       if (eligible[i].sig !== eligible[j].sig) continue;
       if (eligible[i].deviceId === eligible[j].deviceId) continue;
       await addTotals(eligible[i].extracted);
-      await markCounted(puCode);
+      await markCounted(puCode, eligible[i].extracted);
       return true;
     }
   }
@@ -226,11 +252,26 @@ export const handler = async (event) => {
     if (method === 'GET' && path === '/summary') {
       const [totals, counts] = await Promise.all([
         get('AGG', 'TOTALS'),
-        query('CNT', { ProjectionExpression: 'sk, n, v' }),
+        query('CNT', { ProjectionExpression: 'sk, n, v, st' }),
       ]);
       const c = {};
-      for (const r of counts) c[r.sk] = [r.n || 0, r.v ? 1 : 0];
+      // Third element is the status; older clients read only the first two.
+      for (const r of counts) c[r.sk] = [r.n || 0, r.v ? 1 : 0, r.st || ''];
       return json(200, { totals: totals?.p || {}, counts: c }, { 'cache-control': 'public, max-age=15' });
+    }
+
+    // Per-polling-unit figures behind the totals, so the headline number can
+    // be traced back to the units that produced it.
+    if (method === 'GET' && path === '/breakdown') {
+      const rows = await query('CNT');
+      return json(200, {
+        rows: rows.map((r) => ({
+          puCode: r.sk,
+          uploads: r.n || 0,
+          status: r.st || (r.v ? 'added' : 'pending'),
+          results: r.res || {},
+        })),
+      }, { 'cache-control': 'public, max-age=15' });
     }
 
     if (method === 'GET' && path === '/pu') {
@@ -320,9 +361,17 @@ export const handler = async (event) => {
         if (!uploads.length) return json(404, { error: 'upload not found' });
         const cnt = await get('CNT', puCode);
         if (cnt?.v) return json(200, { ok: true, note: 'already counted' });
-        await addTotals(uploads[0].extracted || {});
-        await markCounted(puCode);
-        return json(200, { ok: true });
+        // Approving after a revoke is a deliberate reversal and is allowed.
+        const figures = uploads[0].extracted || {};
+        await addTotals(figures);
+        await markCounted(puCode, figures);
+        return json(200, { ok: true, added: figures });
+      }
+
+      if (method === 'POST' && path === '/admin/revoke') {
+        const puCode = String(body.puCode || '');
+        const r = await revokeCounted(puCode);
+        return json(r.ok ? 200 : 409, r);
       }
     }
 
