@@ -1,86 +1,73 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>irev2.com &mdash; Under Construction</title>
-  <meta name="description" content="irev2.com is under construction.">
-  <meta name="robots" content="noindex, nofollow">
-  <style>
-    :root {
-      --bg: #0b1020;
-      --fg: #e8ecf5;
-      --muted: #96a0b8;
-      --accent: #5b8cff;
-      --line: rgba(232, 236, 245, 0.12);
-    }
-    * { box-sizing: border-box; }
-    html, body { height: 100%; margin: 0; }
-    body {
-      background: radial-gradient(1100px 620px at 50% -12%, #17203f 0%, transparent 60%), var(--bg);
-      color: var(--fg);
-      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-                   "Helvetica Neue", Arial, sans-serif;
-      display: grid;
-      place-items: center;
-      padding: 2rem;
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-    main {
-      max-width: 40rem;
-      text-align: center;
-    }
-    .badge {
-      display: inline-block;
-      font-size: 0.75rem;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: var(--accent);
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      padding: 0.4rem 0.9rem;
-      margin-bottom: 1.75rem;
-    }
-    h1 {
-      font-size: clamp(2rem, 6vw, 3.25rem);
-      line-height: 1.15;
-      margin: 0 0 1rem;
-      font-weight: 650;
-      letter-spacing: -0.02em;
-    }
-    p {
-      color: var(--muted);
-      font-size: clamp(1rem, 2.4vw, 1.125rem);
-      margin: 0 auto;
-      max-width: 32rem;
-    }
-    footer {
-      margin-top: 3rem;
-      padding-top: 1.5rem;
-      border-top: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 0.8125rem;
-    }
-    @media (prefers-reduced-motion: no-preference) {
-      main { animation: rise 0.6s ease-out both; }
-      @keyframes rise {
-        from { opacity: 0; transform: translateY(10px); }
-        to   { opacity: 1; transform: none; }
-      }
-    }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Osun Election Monitoring Portal — irev2.com</title>
+<meta name="description" content="Upload and verify polling unit result sheets for Osun State.">
+<link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <main>
-    <span class="badge">irev2.com</span>
-    <h1>Under Construction</h1>
-    <p>
-      This site is being built. Please check back soon.
-    </p>
-    <footer>
-      Deployed with Terraform &middot; Amazon S3 &middot; CloudFront
-    </footer>
-  </main>
+
+<p class="notice" role="status">
+  Please enable “location services” on your phone and also give your camera
+  permissions to tag photos with location data
+</p>
+
+<header class="hero">
+  <h1>OSUN ELECTION MONITORING PORTAL</h1>
+  <p class="sub">(SCROLL DOWN TO SELECT YOUR POLLING UNIT. COME BACK ON JAN 16TH 2027
+     TO UPLOAD PRESIDENTIAL ELECTION RESULTS.)</p>
+
+  <section class="totals" aria-labelledby="totals-h">
+    <h2 id="totals-h">TOTAL RESULTS SO FAR</h2>
+    <div id="totals" class="tiles"><p class="muted">Loading totals…</p></div>
+  </section>
+
+  <div class="admin-actions">
+    <a class="btn btn-primary" href="/messages.html">send a message to admin here</a>
+    <a class="btn" href="/messages.html#chat">show my chat with admin</a>
+  </div>
+</header>
+
+<main>
+  <div class="searches">
+    <label>
+      <span>Search your polling unit</span>
+      <input id="q-pu" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
+    </label>
+    <label>
+      <span>Search by ward</span>
+      <input id="q-ward" type="search" placeholder="e.g. IWARA" autocomplete="off">
+    </label>
+  </div>
+
+  <p id="count-line" class="muted"></p>
+
+  <table id="grid">
+    <thead>
+      <tr>
+        <th class="col-upload">Upload</th>
+        <th>Polling unit</th>
+        <th class="col-ward">Ward / LGA</th>
+        <th class="col-extract">Extracted result</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="sentinel"></div>
+  <p id="more" class="muted"></p>
+</main>
+
+<footer>
+  <p>irev2.com — citizen result monitoring for Osun State.
+     Photos are stored for verification and cannot be downloaded.</p>
+</footer>
+
+<input id="file" type="file" accept="image/*" capture="environment" hidden>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="/app.js"></script>
 </body>
 </html>

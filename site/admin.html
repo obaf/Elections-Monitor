@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Admin — irev2.com</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="page">
+  <p><a href="/">← back to the portal</a></p>
+  <h1>Admin</h1>
+
+  <section id="login">
+    <div class="row"><input id="u" type="text" placeholder="Username" autocomplete="username"></div>
+    <div class="row"><input id="p" type="password" placeholder="Password" autocomplete="current-password"></div>
+    <div class="row">
+      <button id="go" class="btn btn-primary">Log in</button>
+      <span id="err" class="muted"></span>
+    </div>
+  </section>
+
+  <section id="panel" hidden>
+    <div class="row">
+      <button id="tab-uploads" class="btn btn-primary">Uploads</button>
+      <button id="tab-msgs" class="btn">Messages to admin</button>
+      <button id="out" class="btn">Log out</button>
+    </div>
+    <div id="uploads"></div>
+    <div id="msgs" hidden></div>
+  </section>
+</div>
+
+<script>
+const API = '/api';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nf = new Intl.NumberFormat('en-NG');
+let token = sessionStorage.getItem('irev2-admin') || '';
+
+const api = (p, opts = {}) => fetch(API + p, {
+  ...opts,
+  headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token, ...(opts.headers || {}) },
+});
+
+function show() {
+  $('#login').hidden = !!token;
+  $('#panel').hidden = !token;
+  if (token) loadUploads();
+}
+
+$('#go').addEventListener('click', async () => {
+  $('#err').textContent = 'Checking…';
+  try {
+    const r = await fetch(API + '/admin/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: $('#u').value, password: $('#p').value }),
+    });
+    if (!r.ok) { $('#err').textContent = 'Invalid credentials.'; return; }
+    token = (await r.json()).token;
+    sessionStorage.setItem('irev2-admin', token);
+    $('#err').textContent = '';
+    show();
+  } catch { $('#err').textContent = 'Login failed.'; }
+});
+
+$('#out').addEventListener('click', () => { token = ''; sessionStorage.removeItem('irev2-admin'); show(); });
+$('#tab-uploads').addEventListener('click', () => { $('#uploads').hidden = false; $('#msgs').hidden = true; loadUploads(); });
+$('#tab-msgs').addEventListener('click', () => { $('#uploads').hidden = true; $('#msgs').hidden = false; loadMsgs(); });
+
+async function loadUploads() {
+  $('#uploads').innerHTML = '<p class="muted">Loading…</p>';
+  const r = await api('/admin/recent');
+  if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
+  const { uploads } = await r.json();
+  $('#uploads').innerHTML = uploads.length ? uploads.map((u) => {
+    const rows = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+    return `<div class="card" style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0;background:#fff">
+      <div><strong>${esc(u.puCode)}</strong> · ${new Date(u.ts).toLocaleString()} ·
+        ${u.inOsun ? '<span class="badge badge-ok">in Osun</span>' : '<span class="badge badge-no">no Osun location</span>'}</div>
+      <img src="${esc(u.url)}" alt="" style="max-width:220px;display:block;margin:8px 0;border-radius:6px">
+      <div>${rows.length ? rows.map(([p, v]) => `${esc(p)}: <strong>${nf.format(v)}</strong>`).join(' · ') : '<span class="muted">nothing extracted</span>'}</div>
+      <div class="row">
+        <button class="btn btn-primary" data-approve="${esc(u.uploadId)}" data-pu="${esc(u.puCode)}">Approve into totals</button>
+      </div>
+    </div>`;
+  }).join('') : '<p class="muted">No uploads yet.</p>';
+}
+
+async function loadMsgs() {
+  $('#msgs').innerHTML = '<p class="muted">Loading…</p>';
+  const r = await api('/admin/threads');
+  if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
+  const { threads } = await r.json();
+  $('#msgs').innerHTML = threads.length ? threads.map((t) => `
+    <div style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0;background:#fff">
+      <div class="muted">Thread ${esc(t.threadId).slice(0, 8)} · last ${new Date(t.lastTs).toLocaleString()}</div>
+      <div class="thread">${(t.messages || []).map((m) => `
+        <div class="msg ${m.from === 'admin' ? 'admin' : 'user'}">
+          <div class="who">${m.from === 'admin' ? 'Admin' : 'User'}</div><div>${esc(m.text)}</div></div>`).join('')}</div>
+      <textarea rows="2" data-reply="${esc(t.threadId)}" placeholder="Reply…"></textarea>
+      <div class="row"><button class="btn btn-primary" data-send="${esc(t.threadId)}">Send reply</button></div>
+    </div>`).join('') : '<p class="muted">No messages yet.</p>';
+}
+
+document.addEventListener('click', async (e) => {
+  const ap = e.target.closest('[data-approve]');
+  if (ap) {
+    ap.disabled = true; ap.textContent = 'Approving…';
+    await api('/admin/approve', { method: 'POST', body: JSON.stringify({ puCode: ap.dataset.pu, uploadId: ap.dataset.approve }) });
+    loadUploads();
+    return;
+  }
+  const send = e.target.closest('[data-send]');
+  if (send) {
+    const id = send.dataset.send;
+    const box = document.querySelector(`[data-reply="${CSS.escape(id)}"]`);
+    const text = box.value.trim();
+    if (!text) return;
+    send.disabled = true;
+    await api('/admin/reply', { method: 'POST', body: JSON.stringify({ threadId: id, text }) });
+    loadMsgs();
+  }
+});
+
+show();
+</script>
+</body>
+</html>

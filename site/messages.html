@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Message the admin — irev2.com</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="page">
+  <p><a href="/">← back to the portal</a></p>
+  <h1>Send a message to admin</h1>
+  <p class="muted">Send a message and come back to this page later to read the reply.
+     Your conversation is kept on this device.</p>
+
+  <div id="thread" class="thread"></div>
+
+  <textarea id="text" rows="4" placeholder="Type your message to the admin…"></textarea>
+  <div class="row">
+    <button id="send" class="btn btn-primary">Send message</button>
+    <button id="refresh" class="btn">Check for a reply</button>
+    <span id="status" class="muted"></span>
+  </div>
+</div>
+
+<script>
+const API = '/api';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let threadId = localStorage.getItem('irev2-thread') || '';
+
+async function load() {
+  if (!threadId) { $('#thread').innerHTML = '<p class="muted">No messages yet.</p>'; return; }
+  try {
+    const r = await (await fetch(`${API}/messages?threadId=${encodeURIComponent(threadId)}`)).json();
+    $('#thread').innerHTML = r.messages?.length
+      ? r.messages.map((m) => `<div class="msg ${m.from === 'admin' ? 'admin' : 'user'}">
+           <div class="who">${m.from === 'admin' ? 'Admin' : 'You'} · ${new Date(m.ts).toLocaleString()}</div>
+           <div>${esc(m.text)}</div></div>`).join('')
+      : '<p class="muted">No messages yet.</p>';
+  } catch { $('#status').textContent = 'Could not load messages.'; }
+}
+
+$('#send').addEventListener('click', async () => {
+  const text = $('#text').value.trim();
+  if (!text) return;
+  $('#status').textContent = 'Sending…';
+  try {
+    const r = await (await fetch(`${API}/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: threadId || undefined, text }),
+    })).json();
+    threadId = r.threadId;
+    localStorage.setItem('irev2-thread', threadId);
+    $('#text').value = '';
+    $('#status').textContent = 'Sent. Come back here to see the reply.';
+    load();
+  } catch { $('#status').textContent = 'Could not send. Please try again.'; }
+});
+
+$('#refresh').addEventListener('click', () => { $('#status').textContent = ''; load(); });
+load();
+</script>
+</body>
+</html>

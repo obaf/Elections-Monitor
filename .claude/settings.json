@@ -1,0 +1,14 @@
+{
+    "permissions": {
+      "allow": [
+        "Bash(/c/PHD_RESEARCH/_tfbin/terraform.exe -chdir=bootstrap *)",
+        "Bash(/c/PHD_RESEARCH/_tfbin/terraform.exe -chdir=infra *)",
+        "Bash(terraform *)"
+      ],
+      "deny": [
+        "Bash(/c/PHD_RESEARCH/_tfbin/terraform.exe -chdir=bootstrap destroy *)",
+        "Bash(/c/PHD_RESEARCH/_tfbin/terraform.exe -chdir=infra destroy *)",
+        "Bash(terraform destroy *)"
+      ]
+    }
+  }

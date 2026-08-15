@@ -6,6 +6,12 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    # Zips the api/ directory into the Lambda bundle at plan time, which keeps
+    # CI to a single terraform apply with no build step.
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 
   # Partial backend configuration. The bucket name embeds the AWS account ID,

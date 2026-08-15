@@ -50,6 +50,7 @@ locals {
 
   state_bucket = "${local.domain_slug}-tfstate-${local.account_id}"
   site_bucket  = "${local.domain_slug}-site-${local.account_id}"
+  photo_bucket = "${local.domain_slug}-photos-${local.account_id}"
 
   github_sub_prefix = "repo:${var.github_owner}/${var.github_repo}"
 
@@ -236,7 +237,98 @@ data "aws_iam_policy_document" "deploy" {
     resources = [
       "arn:aws:s3:::${local.site_bucket}",
       "arn:aws:s3:::${local.site_bucket}/*",
+      "arn:aws:s3:::${local.photo_bucket}",
+      "arn:aws:s3:::${local.photo_bucket}/*",
     ]
+  }
+
+  # --- Application backend -------------------------------------------------
+  statement {
+    sid    = "Dynamo"
+    effect = "Allow"
+    actions = [
+      "dynamodb:CreateTable",
+      "dynamodb:DeleteTable",
+      "dynamodb:DescribeTable",
+      "dynamodb:UpdateTable",
+      "dynamodb:DescribeTimeToLive",
+      "dynamodb:UpdateTimeToLive",
+      "dynamodb:DescribeContinuousBackups",
+      "dynamodb:UpdateContinuousBackups",
+      "dynamodb:ListTagsOfResource",
+      "dynamodb:TagResource",
+      "dynamodb:UntagResource",
+    ]
+    resources = ["arn:aws:dynamodb:*:${local.account_id}:table/${local.domain_slug}-app"]
+  }
+
+  statement {
+    sid    = "Lambda"
+    effect = "Allow"
+    actions = [
+      "lambda:CreateFunction",
+      "lambda:DeleteFunction",
+      "lambda:GetFunction",
+      "lambda:GetFunctionConfiguration",
+      "lambda:GetFunctionCodeSigningConfig",
+      "lambda:UpdateFunctionCode",
+      "lambda:UpdateFunctionConfiguration",
+      "lambda:ListVersionsByFunction",
+      "lambda:AddPermission",
+      "lambda:RemovePermission",
+      "lambda:GetPolicy",
+      "lambda:TagResource",
+      "lambda:UntagResource",
+      "lambda:ListTags",
+    ]
+    resources = ["arn:aws:lambda:*:${local.account_id}:function:${local.domain_slug}-api"]
+  }
+
+  # API Gateway's control plane does not support resource-level scoping on
+  # creation, so this is granted on the account's apigateway namespace.
+  statement {
+    sid       = "ApiGateway"
+    effect    = "Allow"
+    actions   = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
+    resources = ["arn:aws:apigateway:*::/apis", "arn:aws:apigateway:*::/apis/*"]
+  }
+
+  statement {
+    sid    = "LambdaLogs"
+    effect = "Allow"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:DeleteLogGroup",
+      "logs:DescribeLogGroups",
+      "logs:PutRetentionPolicy",
+      "logs:TagResource",
+      "logs:UntagResource",
+      "logs:ListTagsForResource",
+    ]
+    resources = ["arn:aws:logs:*:${local.account_id}:log-group:/aws/lambda/${local.domain_slug}-api*"]
+  }
+
+  # Scoped to this one role name so the deploy role cannot mint arbitrary
+  # identities -- PassRole in particular is a privilege-escalation path.
+  statement {
+    sid    = "LambdaExecutionRole"
+    effect = "Allow"
+    actions = [
+      "iam:CreateRole",
+      "iam:DeleteRole",
+      "iam:GetRole",
+      "iam:PassRole",
+      "iam:PutRolePolicy",
+      "iam:GetRolePolicy",
+      "iam:DeleteRolePolicy",
+      "iam:ListRolePolicies",
+      "iam:ListAttachedRolePolicies",
+      "iam:ListInstanceProfilesForRole",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${local.account_id}:role/${local.domain_slug}-api"]
   }
 
   # --- CloudFront ---------------------------------------------------------

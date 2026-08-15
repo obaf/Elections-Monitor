@@ -32,3 +32,15 @@ credentials
 Thumbs.db
 .vscode/
 .idea/
+
+# Spec + secrets for the web app -- never commit
+Election monitor web app prompt.docx
+admin user and pwd.txt
+~$*.xlsx
+~$*.docx
+osun-polling-units.xlsx
+osun-polling-units.csv
+.admin-ssm.json
+
+# Lambda build artefact
+infra/.build/
