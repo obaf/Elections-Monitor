@@ -64,6 +64,56 @@ password is not in the repo or in Terraform state.
 Ward and LGA names are de-duplicated into index arrays to keep the payload at
 194 KB, roughly 35 KB over the wire.
 
+## AWS Resources Used
+
+Everything below lives in account `768332541841`, region `us-east-1`. Names embed
+the account ID because S3 bucket names are globally unique.
+
+### Provisioned by `infra/` (applied by CI)
+
+| Service | Resource | Name / identifier | Purpose |
+|---|---|---|---|
+| S3 | Bucket | `irev2-com-site-<account>` | Static site origin. Private; reachable only via CloudFront |
+| S3 | Bucket | `irev2-com-photos-<account>` | Uploaded result photos. Private, CORS for presigned `PUT`, lifecycle to STANDARD_IA at 30 days |
+| S3 | Objects | 9 files under `site/` | `index.html`, `breakdown.html`, `uploads.html`, `admin.html`, `messages.html`, `error.html`, `app.js`, `styles.css`, `polling-units.json` |
+| CloudFront | Distribution | `E2XHM5IYC6KS4P` | Serves `/*` from the site bucket, `/photos/*` from the photo bucket, `/api/*` from the HTTP API |
+| CloudFront | Origin Access Control | `irev2-com-oac` | SigV4 signing so both buckets stay private |
+| CloudFront | Managed policies (read-only) | `CachingOptimized`, `CachingDisabled`, `SecurityHeadersPolicy`, `AllViewerExceptHostHeader` | Referenced, not created |
+| ACM | Certificate | `irev2.com` + `www.irev2.com` | TLS for CloudFront; must be in us-east-1 |
+| Route 53 | A + AAAA alias records | apex and `www` | Point at the distribution |
+| Route 53 | Validation CNAMEs | 2 records | ACM DNS validation |
+| API Gateway v2 | HTTP API + integration, route, stage | `irev2-com-api` | `$default` route proxying to the Lambda |
+| Lambda | Function | `irev2-com-api` | Node.js 22, 512 MB, 30 s. Presign, EXIF, OCR, totals, admin |
+| Lambda | Permission | `AllowApiGateway` | Lets API Gateway invoke it |
+| DynamoDB | Table | `irev2-com-app` | Single table, on-demand, PITR on. Uploads, counts, totals, messages, audit |
+| IAM | Role + inline policy | `irev2-com-api` | Lambda execution role |
+| CloudWatch Logs | Log group | `/aws/lambda/irev2-com-api` | 14-day retention |
+
+### Provisioned by `bootstrap/` (run once, locally)
+
+| Service | Resource | Name / identifier | Purpose |
+|---|---|---|---|
+| S3 | Bucket | `irev2-com-tfstate-<account>` | Terraform state for `infra/`. Versioned, encrypted, TLS-only, `prevent_destroy` |
+| IAM | OIDC provider | `token.actions.githubusercontent.com` | Lets GitHub Actions federate in |
+| IAM | Role + inline policy | `irev2-com-github-actions-deploy` | Assumed by CI via short-lived OIDC tokens; scoped to this repo's `main` and pull requests |
+
+### Used at runtime, not provisioned as resources
+
+| Service | Notes |
+|---|---|
+| Textract | `DetectDocumentText`, called once per uploaded photo. Pay-per-page, no resource to create |
+| STS | `AssumeRoleWithWebIdentity` for the CI OIDC exchange |
+| S3 (native locking) | The state bucket's `.tflock` object, via `use_lockfile` — no DynamoDB lock table |
+
+### Outside Terraform
+
+Two things are deliberately not managed by Terraform:
+
+| Service | Resource | Why |
+|---|---|---|
+| SSM Parameter Store | `/irev2/admin` (SecureString) | Holds the admin username and salted password hash. Created out of band with the CLI so the secret never enters Terraform state or the repo |
+| Route 53 | Hosted zone `Z095210523VY9LMIVMLF1` and the registered domain `irev2.com` | Pre-existing; read via a data source. Terraform writes records into the zone but does not own it |
+
 ## One-time setup
 
 Run once, locally, with administrator AWS credentials.
