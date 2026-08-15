@@ -26,16 +26,16 @@ locals {
   site_root = "${path.module}/../site"
 
   mime_types = {
-    ".html" = "text/html; charset=utf-8"
-    ".css"  = "text/css; charset=utf-8"
-    ".js"   = "application/javascript; charset=utf-8"
-    ".json" = "application/json"
-    ".svg"  = "image/svg+xml"
-    ".png"  = "image/png"
-    ".jpg"  = "image/jpeg"
-    ".ico"  = "image/x-icon"
-    ".txt"  = "text/plain; charset=utf-8"
-    ".webp" = "image/webp"
+    ".html"  = "text/html; charset=utf-8"
+    ".css"   = "text/css; charset=utf-8"
+    ".js"    = "application/javascript; charset=utf-8"
+    ".json"  = "application/json"
+    ".svg"   = "image/svg+xml"
+    ".png"   = "image/png"
+    ".jpg"   = "image/jpeg"
+    ".ico"   = "image/x-icon"
+    ".txt"   = "text/plain; charset=utf-8"
+    ".webp"  = "image/webp"
     ".woff2" = "font/woff2"
   }
 
@@ -91,10 +91,10 @@ resource "aws_s3_bucket_versioning" "site" {
 resource "aws_s3_object" "site" {
   for_each = local.site_files
 
-  bucket       = aws_s3_bucket.site.id
-  key          = each.value
-  source       = "${local.site_root}/${each.value}"
-  etag         = filemd5("${local.site_root}/${each.value}")
+  bucket = aws_s3_bucket.site.id
+  key    = each.value
+  source = "${local.site_root}/${each.value}"
+  etag   = filemd5("${local.site_root}/${each.value}")
   # try() keeps extensionless files from failing the regex outright.
   content_type = lookup(local.mime_types, try(regex("\\.[^.]+$", each.value), ""), "application/octet-stream")
 
