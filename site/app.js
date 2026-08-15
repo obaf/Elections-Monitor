@@ -285,9 +285,11 @@ function refreshAdminUi() {
   $('#admin-flag').hidden = !isAdmin();
   $('#admin-login-btn').hidden = isAdmin();
   $('#admin-logout-btn').hidden = !isAdmin();
-  // Hidden for visitors. The page behind it also checks the token server-side,
-  // so hiding the button is presentation, not the access control.
+  // Hidden for visitors. The pages behind these also check the token, and the
+  // endpoints they call require it, so hiding the buttons is presentation
+  // rather than the access control itself.
   $('#upload-count-btn').hidden = !isAdmin();
+  $('#admin-msgs-btn').hidden = !isAdmin();
 }
 
 $('#admin-login-btn').addEventListener('click', () => {

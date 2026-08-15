@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Messages to admin — irev2.com</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE</span>
+  <a class="btn btn-small" href="/">← back to the portal</a>
+  <button id="admin-login-btn" class="btn btn-small">admin login</button>
+  <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
+</div>
+
+<div class="page">
+  <h1>Messages to admin</h1>
+  <p class="muted" id="intro">Every message sent through the portal, newest first.
+     Replying here puts the response on the sender's own message page.</p>
+
+  <div id="gate" hidden>
+    <p class="login-err">This page is for admins only. Please log in.</p>
+  </div>
+
+  <div id="panel" hidden>
+    <div class="toolbar">
+      <label class="grow">
+        <span>Search message text</span>
+        <input id="q" type="search" placeholder="e.g. rig" autocomplete="off">
+      </label>
+      <button id="refresh" class="btn">Refresh</button>
+    </div>
+    <div id="threads"></div>
+  </div>
+</div>
+
+<dialog id="login-dlg" class="dlg">
+  <h2>Admin login</h2>
+  <p class="muted">Messages to admin are only visible to admins.</p>
+  <label class="fld"><span>Username</span>
+    <input id="admin-u" type="text" autocomplete="username"></label>
+  <label class="fld"><span>Password</span>
+    <input id="admin-p" type="password" autocomplete="current-password"></label>
+  <p id="login-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="admin-go" class="btn btn-primary">Log in</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<div id="toast" class="toast" hidden></div>
+
+<script>
+const API = '/api';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let THREADS = [];
+let adminToken = sessionStorage.getItem('irev2-admin') || '';
+const isAdmin = () => !!adminToken;
+
+function toast(msg, ms = 6000) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+function render() {
+  const q = $('#q').value.trim().toLowerCase();
+  const list = q
+    ? THREADS.filter((t) => (t.messages || []).some((m) => (m.text || '').toLowerCase().includes(q)))
+    : THREADS;
+
+  const awaiting = list.filter((t) => {
+    const msgs = t.messages || [];
+    return msgs.length && msgs[msgs.length - 1].from !== 'admin';
+  }).length;
+
+  $('#intro').innerHTML = list.length
+    ? `<strong>${list.length}</strong> conversation${list.length === 1 ? '' : 's'}` +
+      (awaiting ? ` · <strong>${awaiting}</strong> awaiting a reply` : ' · all replied to') +
+      '. Replying here puts the response on the sender&rsquo;s own message page.'
+    : (q ? 'No message matches that search.' : 'No messages have been sent yet.');
+
+  $('#threads').innerHTML = list.map((t) => {
+    const msgs = t.messages || [];
+    const unanswered = msgs.length && msgs[msgs.length - 1].from !== 'admin';
+    return `<div class="msg-card">
+      <div class="msg-head">
+        <span class="pu-code">from visitor ${esc(t.threadId).slice(0, 8)} ·
+          last message ${new Date(t.lastTs).toLocaleString()}</span>
+        ${unanswered ? '<span class="pill pill-revoked">awaiting reply</span>'
+                     : '<span class="pill pill-added">replied</span>'}
+      </div>
+      <div class="thread">${msgs.map((m) => `
+        <div class="msg ${m.from === 'admin' ? 'admin' : 'user'}">
+          <div class="who">${m.from === 'admin' ? 'Admin' : 'Visitor'} ·
+            ${new Date(m.ts).toLocaleString()}</div>
+          <div>${esc(m.text)}</div>
+        </div>`).join('')}</div>
+      <textarea rows="2" data-reply="${esc(t.threadId)}" placeholder="Write a reply…"></textarea>
+      <div class="row"><button class="btn btn-primary" data-send="${esc(t.threadId)}">Send reply</button></div>
+    </div>`;
+  }).join('');
+}
+
+async function load() {
+  $('#threads').innerHTML = '<p class="muted">Loading…</p>';
+  const r = await fetch(`${API}/admin/threads`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (r.status === 401) {
+    adminToken = ''; sessionStorage.removeItem('irev2-admin');
+    refreshAdminUi();
+    toast('Your admin session expired. Please log in again.');
+    return;
+  }
+  if (!r.ok) { $('#threads').innerHTML = '<p class="muted">Could not load messages.</p>'; return; }
+  THREADS = (await r.json()).threads || [];
+  render();
+}
+
+function refreshAdminUi() {
+  $('#admin-flag').hidden = !isAdmin();
+  $('#admin-login-btn').hidden = isAdmin();
+  $('#admin-logout-btn').hidden = !isAdmin();
+  $('#panel').hidden = !isAdmin();
+  $('#gate').hidden = isAdmin();
+}
+
+$('#admin-login-btn').addEventListener('click', () => {
+  $('#login-err').hidden = true;
+  $('#login-dlg').showModal();
+});
+
+$('#admin-logout-btn').addEventListener('click', () => {
+  adminToken = ''; sessionStorage.removeItem('irev2-admin');
+  THREADS = [];
+  refreshAdminUi();
+  toast('Logged out of admin.');
+});
+
+$('#admin-go').addEventListener('click', async () => {
+  const err = $('#login-err');
+  err.hidden = true;
+  try {
+    const r = await fetch(`${API}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: $('#admin-u').value, password: $('#admin-p').value }),
+    });
+    if (!r.ok) { err.textContent = 'Invalid username or password.'; err.hidden = false; return; }
+    adminToken = (await r.json()).token;
+    sessionStorage.setItem('irev2-admin', adminToken);
+    $('#admin-p').value = '';
+    $('#login-dlg').close();
+    refreshAdminUi();
+    await load();
+  } catch {
+    err.textContent = 'Could not reach the server. Please try again.';
+    err.hidden = false;
+  }
+});
+
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('[data-close]')) { e.target.closest('dialog')?.close(); return; }
+
+  const send = e.target.closest('[data-send]');
+  if (!send) return;
+  const id = send.dataset.send;
+  const box = document.querySelector(`[data-reply="${CSS.escape(id)}"]`);
+  const text = box.value.trim();
+  if (!text) { toast('Write a reply first.'); return; }
+
+  send.disabled = true; send.textContent = 'Sending…';
+  try {
+    const r = await fetch(`${API}/admin/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ threadId: id, text }),
+    });
+    if (!r.ok) throw new Error('reply failed');
+    toast('Reply sent — the visitor will see it on their message page.');
+    await load();
+  } catch {
+    send.disabled = false; send.textContent = 'Send reply';
+    toast('Could not send that reply. Please try again.');
+  }
+});
+
+let debounce;
+$('#q').addEventListener('input', () => {
+  clearTimeout(debounce); debounce = setTimeout(render, 140);
+});
+$('#refresh').addEventListener('click', load);
+
+refreshAdminUi();
+if (isAdmin()) load().catch(() => { $('#threads').innerHTML = '<p class="muted">Could not load messages.</p>'; });
+</script>
+</body>
+</html>
