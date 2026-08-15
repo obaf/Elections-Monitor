@@ -24,7 +24,12 @@ def post(path, payload):
 
 
 def put(url, body):
-    req = urllib.request.Request(url, data=body, method="PUT")
+    # The browser sets this automatically from the File object; urllib would
+    # otherwise send application/x-www-form-urlencoded and S3 would store the
+    # photo under that content type.
+    req = urllib.request.Request(
+        url, data=body, method="PUT", headers={"content-type": "image/jpeg"}
+    )
     with urllib.request.urlopen(req, timeout=120) as r:
         return r.status
 
