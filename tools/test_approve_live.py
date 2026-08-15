@@ -82,7 +82,11 @@ for label, payload, want_code in (
     print("         message: {}".format(resp.get("error") or resp.get("_body")))
 
 print("\n3. the refusals changed nothing")
+# The important one: sending unusable figures must NOT quietly approve the OCR
+# numbers instead. That would count figures the admin never agreed to.
 check("totals still empty", call("/api/summary")[1]["totals"], {})
+check("unit not counted", [x["status"] for x in call("/api/breakdown")[1]["rows"]
+                           if x["puCode"] == PU] or ["absent"], ["pending"])
 
 print("\n4. an amended approve lands")
 before = call("/api/summary")[1]["totals"]
@@ -104,6 +108,12 @@ entry = [e for e in call("/api/admin/audit", auth=tok)[1]["entries"]
 check("flagged as edited", entry["edited"], True)
 check("keeps the OCR original", entry["ocr"], {"APC": 50, "PDP": 60})
 check("records the approved figures", entry["figures"], edited)
+
+print("\n7. approving an already-counted unit is refused, not reported as success")
+code, resp = call("/api/admin/approve", {"puCode": PU, "uploadId": uid, "figures": edited}, auth=tok)
+check("status", code, 409)
+check("explains itself", bool(resp.get("error", "").strip()), True)
+check("totals unchanged", call("/api/summary")[1]["totals"], edited)
 
 print("\n" + ("ALL PASSED" if not FAIL else "{} FAILED: {}".format(len(FAIL), FAIL)))
 sys.exit(1 if FAIL else 0)

@@ -491,15 +491,37 @@ export const handler = async (event) => {
           });
         }
         const cnt = await get('CNT', puCode);
-        if (cnt?.v) return json(200, { ok: true, note: 'already counted' });
+        if (cnt?.v) {
+          // 409, not 200: reporting success for a no-op is how "it didn't work"
+          // becomes impossible to diagnose.
+          return json(409, {
+            error: 'This polling unit has already been counted. Revoke it first if the figures need changing.',
+            totals: (await get('AGG', 'TOTALS'))?.p || {},
+          });
+        }
         // Approving after a revoke is a deliberate reversal and is allowed.
         const ocr = uploads[0].extracted || {};
-        const edited = sanitiseFigures(body.figures);
+
+        /* Two distinct cases, and conflating them was a real defect: if the
+         * caller SENT figures but none survive validation, falling back to the
+         * OCR numbers would approve figures the admin never agreed to and
+         * report success. An absent `figures` key means "no edit intended". */
+        const sentFigures = Object.prototype.hasOwnProperty.call(body, 'figures') &&
+                            body.figures !== null;
+        const edited = sentFigures ? sanitiseFigures(body.figures) : null;
+        if (sentFigures && !edited) {
+          console.log(`approve: rejected unusable figures ${JSON.stringify(body.figures)}`);
+          return json(400, {
+            error: 'None of those figures could be used. Every row needs a party name ' +
+                   'and a whole-number score of zero or more.',
+          });
+        }
+
         const figures = edited || ocr;
         if (!Object.keys(figures).length) {
-          console.log(`approve: nothing usable. body.figures=${JSON.stringify(body.figures)} ocr=${JSON.stringify(ocr)}`);
+          console.log(`approve: nothing to approve; ocr=${JSON.stringify(ocr)}`);
           return json(400, {
-            error: 'No usable figures. Every row needs a party name and a whole-number score.',
+            error: 'Nothing was read from this photo, so enter the figures by hand before approving.',
           });
         }
         const reason = String(body.reason || '').slice(0, 500).trim();
