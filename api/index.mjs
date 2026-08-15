@@ -123,8 +123,13 @@ async function processUpload({ puCode, key, deviceId }) {
     const r = await textract('Textract.DetectDocumentText', {
       Document: { S3Object: { Bucket: BUCKET, Name: key } },
     });
-    lines = (r.Blocks || []).filter((b) => b.BlockType === 'LINE').map((b) => b.Text);
-    extracted = parseResults(lines);
+    const blocks = (r.Blocks || [])
+      .filter((b) => b.BlockType === 'LINE')
+      .map((b) => ({ text: b.Text, box: b.Geometry?.BoundingBox }));
+    lines = blocks.map((b) => b.text);
+    // Geometry matters: the sheet is a table and each cell arrives as its own
+    // line, so the score is found by position rather than by string proximity.
+    extracted = parseResults(blocks);
   } catch (e) {
     console.error('textract failed', String(e));
   }

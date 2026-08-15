@@ -289,9 +289,15 @@ data "aws_iam_policy_document" "deploy" {
   # goes through a separate /tags/<encoded-arn> path rather than the API's own,
   # so both shapes have to be listed.
   statement {
-    sid     = "ApiGateway"
-    effect  = "Allow"
-    actions = ["apigateway:GET", "apigateway:POST", "apigateway:PUT", "apigateway:PATCH", "apigateway:DELETE"]
+    sid    = "ApiGateway"
+    effect = "Allow"
+    actions = [
+      "apigateway:GET", "apigateway:POST", "apigateway:PUT",
+      "apigateway:PATCH", "apigateway:DELETE",
+      # v2 exposes tagging as its own actions, not just the HTTP verbs, and
+      # default_tags means every resource here gets tagged on creation.
+      "apigateway:TagResource", "apigateway:UntagResource", "apigateway:GetTags",
+    ]
     resources = [
       "arn:aws:apigateway:*::/apis",
       "arn:aws:apigateway:*::/apis/*",

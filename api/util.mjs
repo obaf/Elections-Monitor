@@ -155,31 +155,81 @@ export const PARTIES = [
 const digits = (s) =>
   s.replace(/[OoQD]/g, '0').replace(/[IlL|]/g, '1').replace(/[Ss]/g, '5').replace(/[^\d]/g, '');
 
-export function parseResults(lines) {
+// Accepts either Textract LINE blocks ({ text, box }) or bare strings.
+//
+// A result sheet is a table, and Textract emits each cell as its OWN line --
+// "APC" and "212" arrive as separate blocks, not as one "APC 212" line. So the
+// party and its score are matched by position: same row, score to the right.
+// Bare strings fall back to reading order, which is the sequence Textract
+// returns cells in anyway.
+export function parseResults(input) {
+  const items = (input || []).map((b) => {
+    const text = typeof b === 'string' ? b : (b.text ?? b.Text ?? '');
+    const box = typeof b === 'string' ? null : (b.box ?? b.Box ?? null);
+    const clean = String(text).toUpperCase().replace(/[^A-Z0-9\s.|-]/g, ' ').trim();
+    return { clean, box, tokens: clean.split(/\s+/).filter(Boolean) };
+  }).filter((i) => i.clean);
+
+  const partyOf = (it) => {
+    const t = it.tokens.find((x) => PARTIES.includes(x.replace(/[^A-Z]/g, '')));
+    return t ? t.replace(/[^A-Z]/g, '') : null;
+  };
+
+  // A cell counts as a score only if it is *nothing but* a number, so
+  // "TOTAL VALID VOTES" can never be mistaken for one.
+  const scoreOf = (it) => {
+    if (it.tokens.length !== 1) return null;
+    const d = digits(it.tokens[0]);
+    if (!d || d.length > 6) return null;
+    const n = parseInt(d, 10);
+    return Number.isNaN(n) ? null : n;
+  };
+
   const out = {};
-  for (const raw of lines) {
-    const line = raw.toUpperCase().replace(/[^A-Z0-9\s.|-]/g, ' ').trim();
-    if (!line) continue;
+  const used = new Set();
+  const record = (code, votes) => { out[code] = Math.max(out[code] ?? 0, votes); };
 
-    // The party is whichever known code appears as a standalone token.
-    const tokens = line.split(/\s+/);
-    const party = tokens.find((t) => PARTIES.includes(t.replace(/[^A-Z]/g, '')));
-    if (!party) continue;
-    const code = party.replace(/[^A-Z]/g, '');
-
-    // Votes are the last number-ish token on the line -- result sheets put the
-    // score to the right of the party name.
-    let votes = null;
-    for (let i = tokens.length - 1; i >= 0; i--) {
-      if (tokens[i].replace(/[^A-Z]/g, '') === code) break;
-      const d = digits(tokens[i]);
-      if (d && d.length <= 6) { votes = parseInt(d, 10); break; }
+  // Pass 1 -- party and score already on the same line.
+  items.forEach((it, i) => {
+    const code = partyOf(it);
+    if (!code || it.tokens.length < 2) return;
+    for (let k = it.tokens.length - 1; k >= 0; k--) {
+      if (it.tokens[k].replace(/[^A-Z]/g, '') === code) break;
+      const d = digits(it.tokens[k]);
+      if (d && d.length <= 6) { record(code, parseInt(d, 10)); used.add(i); return; }
     }
-    if (votes === null || Number.isNaN(votes)) continue;
+  });
 
-    // Keep the largest reading if a party somehow appears twice.
-    out[code] = Math.max(out[code] ?? 0, votes);
-  }
+  // Pass 2 -- separate cells. Prefer geometry; fall back to reading order.
+  const centre = (b) => b.Top + b.Height / 2;
+
+  items.forEach((it, i) => {
+    const code = partyOf(it);
+    if (!code || out[code] !== undefined) return;
+
+    if (it.box) {
+      let best = null;
+      items.forEach((other, j) => {
+        if (i === j || used.has(j) || !other.box) return;
+        const score = scoreOf(other);
+        if (score === null) return;
+        // Same row, and to the right of the party name.
+        const sameRow = Math.abs(centre(other.box) - centre(it.box)) < it.box.Height * 0.6;
+        if (!sameRow || other.box.Left <= it.box.Left) return;
+        if (!best || other.box.Left < best.box.Left) best = { j, score, box: other.box };
+      });
+      if (best) { record(code, best.score); used.add(best.j); return; }
+    }
+
+    // No geometry: take the next unconsumed numeric cell in reading order.
+    for (let j = i + 1; j < items.length; j++) {
+      if (used.has(j)) continue;
+      if (partyOf(items[j])) break; // ran into the next party row
+      const score = scoreOf(items[j]);
+      if (score !== null) { record(code, score); used.add(j); return; }
+    }
+  });
+
   return out;
 }
 

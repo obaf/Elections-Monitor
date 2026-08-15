@@ -47,3 +47,6 @@ infra/.build/
 
 # Generated sample photos
 tools/seed/
+
+# Textract fixture is a captured API response, kept for the parser test
+!tools/fixtures/
