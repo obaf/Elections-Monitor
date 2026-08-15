@@ -158,6 +158,37 @@ body {
 }
 .admin-box p { margin: 0 0 8px; font-size: 13px; color: #6b5416; }
 
+/* editable extracted result */
+.edit-tbl { width: auto; min-width: 280px; border: 0; background: none; }
+.edit-tbl th {
+  background: none;
+  border-bottom: 1px solid #e3d3a4;
+  font-size: 12px;
+  color: #6b5416;
+  padding: 2px 6px;
+}
+.edit-tbl td { border: 0; padding: 3px 6px; }
+.edit-tbl input {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+}
+.edit-tbl .p-in { width: 120px; text-transform: uppercase; font-weight: 600; }
+.edit-tbl .v-in { width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+.row-x {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.row-x:hover { color: #7d1a15; }
+.edit-err { color: var(--accent); font-weight: 600; font-size: 13px; margin: 6px 0 0; }
+
 .hero {
   background: var(--card);
   border-bottom: 1px solid var(--line);

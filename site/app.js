@@ -8,6 +8,7 @@ let SUMMARY = { totals: {}, counts: {} };
 let filtered = [];
 let rendered = 0;
 let pendingPu = null;            // polling unit awaiting a file pick
+const OCR = {};                  // uploadId -> figures as Textract read them
 
 /* The admin sees the ordinary page plus approve controls, rather than a
    separate screen, so the thing being approved is viewed in its real context.
@@ -110,18 +111,68 @@ function applyFilter() {
 
 /* ------------------------------- extracts -------------------------------- */
 
+const editRow = (party, votes) => `<tr>
+  <td><input class="p-in" type="text" value="${esc(party)}" maxlength="12"
+             placeholder="PARTY" autocapitalize="characters"></td>
+  <td><input class="v-in" type="number" min="0" step="1" value="${esc(votes)}" placeholder="0"></td>
+  <td><button class="row-x" data-act="delrow" title="remove this party">&times;</button></td>
+</tr>`;
+
+/* OCR gets figures wrong and misses parties entirely, so an admin approving a
+ * photo edits the numbers here rather than accepting whatever Textract read.
+ * The edit is validated again server-side and recorded in the audit trail
+ * alongside what OCR originally said. */
 function adminBox(u, counted, code) {
   if (!isAdmin() || counted) return '';
   const why = u.inOsun
     ? 'This photo has Osun location data but has not been matched by a second phone yet.'
     : 'This photo carries no Osun location data, so it cannot be counted automatically.';
+  const entries = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+  const body = entries.length
+    ? entries.map(([p, v]) => editRow(p, v)).join('')
+    : editRow('', '');
+
   return `<div class="admin-box">
-    <p>${why} Approving adds these figures to the totals for this polling unit.</p>
-    <button class="btn btn-primary" data-act="approve"
-            data-code="${esc(code)}" data-upload="${esc(u.uploadId)}">
-      Approve this photo into the totals
-    </button>
+    <p>${why} Check the figures below against the photo, correct anything misread,
+       add any party that was missed, then approve.</p>
+    <table class="edit-tbl" data-edit="${esc(u.uploadId)}">
+      <thead><tr><th>Party</th><th>Votes</th><th></th></tr></thead>
+      <tbody>${body}</tbody>
+    </table>
+    <p class="edit-err" data-err="${esc(u.uploadId)}" hidden></p>
+    <div class="row">
+      <button class="btn" data-act="addrow" data-upload="${esc(u.uploadId)}">+ add a party</button>
+      <button class="btn" data-act="resetrows" data-upload="${esc(u.uploadId)}">reset to what was read</button>
+      <button class="btn btn-primary" data-act="approve"
+              data-code="${esc(code)}" data-upload="${esc(u.uploadId)}">
+        Approve these figures into the totals
+      </button>
+    </div>
   </div>`;
+}
+
+// Reads the form back out. Rejects blank party names, duplicates and negatives
+// rather than quietly dropping them -- a silently discarded row would look like
+// it had been counted.
+function collectFigures(uploadId) {
+  const tbl = document.querySelector(`[data-edit="${CSS.escape(uploadId)}"]`);
+  if (!tbl) return { error: 'Could not read the table.' };
+  const figures = {};
+  for (const tr of tbl.querySelectorAll('tbody tr')) {
+    const party = tr.querySelector('.p-in').value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const raw = tr.querySelector('.v-in').value.trim();
+    if (!party && raw === '') continue;                       // blank row, ignore
+    if (!party) return { error: 'Every row needs a party name.' };
+    if (raw === '') return { error: `Enter a score for ${party}.` };
+    const votes = Number(raw);
+    if (!Number.isInteger(votes) || votes < 0) {
+      return { error: `${party} needs a whole number, zero or more.` };
+    }
+    if (figures[party] !== undefined) return { error: `${party} appears twice.` };
+    figures[party] = votes;
+  }
+  if (!Object.keys(figures).length) return { error: 'Enter at least one party and score.' };
+  return { figures };
 }
 
 async function toggleExtract(code, tr) {
@@ -156,12 +207,17 @@ async function toggleExtract(code, tr) {
     const badge = u.inOsun
       ? '<span class="badge badge-ok">location in Osun</span>'
       : '<span class="badge badge-no">no Osun location data</span>';
+    // Remember what OCR read, so "reset" can put it back after edits.
+    OCR[u.uploadId] = u.extracted || {};
+    // For an admin about to approve, the editable table replaces the static one
+    // rather than sitting under a duplicate of the same numbers.
+    const editing = isAdmin() && !data.counted;
     return `<div class="card">
       <div><strong>Photo ${i + 1}</strong> · ${new Date(u.ts).toLocaleString()} · ${badge}
            · <span class="pu-code">phone ${esc(u.device)}</span></div>
       <img src="${esc(u.url)}" alt="Result sheet photo ${i + 1}" loading="lazy"
            oncontextmenu="return false">
-      ${table}
+      ${editing ? '' : table}
       ${adminBox(u, data.counted, code)}
     </div>`;
   }).join('');
@@ -269,13 +325,22 @@ $('#admin-go').addEventListener('click', async () => {
 });
 
 async function approve(code, uploadId, btn) {
+  const err = document.querySelector(`[data-err="${CSS.escape(uploadId)}"]`);
+  const { figures, error } = collectFigures(uploadId);
+  if (error) {
+    if (err) { err.textContent = error; err.hidden = false; }
+    else toast(error);
+    return;
+  }
+  if (err) err.hidden = true;
+
   btn.disabled = true;
   btn.textContent = 'Approving…';
   try {
     const r = await fetch(`${API}/admin/approve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ puCode: code, uploadId }),
+      body: JSON.stringify({ puCode: code, uploadId, figures }),
     });
     if (r.status === 401) {
       adminToken = '';
@@ -293,7 +358,7 @@ async function approve(code, uploadId, btn) {
     if (tr) { document.querySelectorAll('tr.detail').forEach((d) => d.remove()); toggleExtract(code, tr); }
   } catch {
     btn.disabled = false;
-    btn.textContent = 'Approve this photo into the totals';
+    btn.textContent = 'Approve these figures into the totals';
     toast('Could not approve that photo. Please try again.');
   }
 }
@@ -316,15 +381,41 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const code = btn.dataset.code;
+  const act = btn.dataset.act;
 
-  if (btn.dataset.act === 'upload') {
+  if (act === 'addrow') {
+    const tbl = document.querySelector(`[data-edit="${CSS.escape(btn.dataset.upload)}"]`);
+    tbl?.querySelector('tbody').insertAdjacentHTML('beforeend', editRow('', ''));
+    tbl?.querySelector('tbody tr:last-child .p-in')?.focus();
+    return;
+  }
+  if (act === 'delrow') {
+    const tr = btn.closest('tr');
+    const tbody = tr.parentElement;
+    tr.remove();
+    if (!tbody.children.length) tbody.insertAdjacentHTML('beforeend', editRow('', ''));
+    return;
+  }
+  if (act === 'resetrows') {
+    const id = btn.dataset.upload;
+    const tbl = document.querySelector(`[data-edit="${CSS.escape(id)}"]`);
+    const entries = Object.entries(OCR[id] || {}).sort((a, b) => b[1] - a[1]);
+    tbl.querySelector('tbody').innerHTML = entries.length
+      ? entries.map(([p, v]) => editRow(p, v)).join('')
+      : editRow('', '');
+    const err = document.querySelector(`[data-err="${CSS.escape(id)}"]`);
+    if (err) err.hidden = true;
+    return;
+  }
+
+  if (act === 'upload') {
     pendingPu = code;
     const pu = DATA?.pus.find((p) => p[0] === code);
     $('#source-pu').textContent = pu ? `${pu[1]} · ${code}` : code;
     $('#source-dlg').showModal();
-  } else if (btn.dataset.act === 'extract') {
+  } else if (act === 'extract') {
     toggleExtract(code, btn.closest('tr'));
-  } else if (btn.dataset.act === 'approve') {
+  } else if (act === 'approve') {
     approve(code, btn.dataset.upload, btn);
   }
 });

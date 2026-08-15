@@ -98,7 +98,27 @@ async function audit(action, puCode, detail) {
     actor: detail.actor || 'admin',
     reason: detail.reason || '',
     figures: detail.figures || {},
+    // Records that a human changed the numbers away from what OCR read, and
+    // what OCR had originally said, so an edit is never silent.
+    edited: !!detail.edited,
+    ocr: detail.ocr || {},
   });
+}
+
+/* An admin may correct a misread figure or add a party OCR missed entirely, so
+ * these numbers arrive from a form rather than from Textract. Re-validated here
+ * because a client that can post figures can post anything. */
+function sanitiseFigures(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(raw)) {
+    const party = String(k).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
+    if (!party) continue;
+    const votes = Number(v);
+    if (!Number.isInteger(votes) || votes < 0 || votes > 1_000_000) continue;
+    out[party] = votes;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 // Subtracts the snapshot back out and records the decision. Kept as a distinct
@@ -392,13 +412,20 @@ export const handler = async (event) => {
         const cnt = await get('CNT', puCode);
         if (cnt?.v) return json(200, { ok: true, note: 'already counted' });
         // Approving after a revoke is a deliberate reversal and is allowed.
-        const figures = uploads[0].extracted || {};
+        const ocr = uploads[0].extracted || {};
+        const edited = sanitiseFigures(body.figures);
+        const figures = edited || ocr;
+        if (!Object.keys(figures).length) {
+          return json(400, { error: 'no figures to approve — enter at least one party and score' });
+        }
         const reason = String(body.reason || '').slice(0, 500).trim();
         await addTotals(figures);
         await markCounted(puCode, figures);
         const cfg = await adminConfig();
         await audit(cnt?.st === 'revoked' ? 're-approve' : 'approve', puCode, {
           reason, actor: cfg.username, figures,
+          edited: !!edited && JSON.stringify(edited) !== JSON.stringify(ocr),
+          ocr,
         });
         return json(200, { ok: true, added: figures });
       }
@@ -434,6 +461,7 @@ export const handler = async (event) => {
           entries: entries.map((e) => ({
             ts: e.ts, action: e.action, puCode: e.puCode,
             actor: e.actor, reason: e.reason, figures: e.figures || {},
+            edited: !!e.edited, ocr: e.ocr || {},
           })),
         });
       }
