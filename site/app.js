@@ -352,8 +352,12 @@ async function approve(code, uploadId, btn) {
       body: JSON.stringify({ puCode: code, uploadId, figures }),
     });
 
+    // An HTML body here means something between the browser and the API
+    // rewrote the response, so say that rather than showing markup.
     let payload = {};
-    try { payload = await r.json(); } catch { /* non-JSON body */ }
+    const text = await r.text();
+    try { payload = JSON.parse(text); }
+    catch { payload = { error: `Unexpected reply from the server (HTTP ${r.status}).` }; }
 
     if (r.status === 401) {
       adminToken = '';

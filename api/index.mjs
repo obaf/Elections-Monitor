@@ -484,7 +484,9 @@ export const handler = async (event) => {
         if (!uploads.length) {
           console.log(`approve: uploadId ${uploadId} not under PU#${puCode}; ` +
                       `have ${all.map((u) => u.uploadId).join(',') || 'none'}`);
-          return json(404, {
+          // 422 rather than 404: CloudFront maps 403/404 to the site's error
+          // page distribution-wide, which would replace this JSON with HTML.
+          return json(422, {
             error: 'That photo is no longer listed for this polling unit. Reload the page and try again.',
           });
         }

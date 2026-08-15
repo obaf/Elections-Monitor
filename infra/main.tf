@@ -245,15 +245,16 @@ resource "aws_cloudfront_distribution" "site" {
     cache_policy_id = data.aws_cloudfront_cache_policy.optimized.id
   }
 
+  # S3 with Origin Access Control answers a missing object with 403, not 404,
+  # so this one mapping covers every missing page.
+  #
+  # There is deliberately NO mapping for 404: custom_error_response is
+  # distribution-wide, so it would also rewrite the API's own 404 responses
+  # into this HTML page. That silently replaced JSON errors like
+  # {"error":"upload not found"} with a Not Found page, leaving the admin UI
+  # unable to say why an approve had failed.
   custom_error_response {
     error_code            = 403
-    response_code         = 404
-    response_page_path    = "/error.html"
-    error_caching_min_ttl = 60
-  }
-
-  custom_error_response {
-    error_code            = 404
     response_code         = 404
     response_page_path    = "/error.html"
     error_caching_min_ttl = 60
