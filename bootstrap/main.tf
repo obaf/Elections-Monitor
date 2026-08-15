@@ -52,6 +52,24 @@ locals {
   site_bucket  = "${local.domain_slug}-site-${local.account_id}"
 
   github_sub_prefix = "repo:${var.github_owner}/${var.github_repo}"
+
+  # GitHub mints "immutable" subject claims that embed the numeric owner and
+  # repository IDs, so a renamed repo cannot inherit another repo's trust:
+  #
+  #   repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:refs/heads/main
+  #
+  # Both spellings are trusted -- the IDs never change, and keeping the plain
+  # form means the role still works if the account is not issuing immutable
+  # subjects. Verified against a real token: the probe in deploy.yml decodes
+  # the live claim.
+  github_immutable_sub_prefix = "repo:${var.github_owner}@${var.github_owner_id}/${var.github_repo}@${var.github_repo_id}"
+
+  allowed_subs = [
+    "${local.github_sub_prefix}:ref:refs/heads/main",
+    "${local.github_sub_prefix}:pull_request",
+    "${local.github_immutable_sub_prefix}:ref:refs/heads/main",
+    "${local.github_immutable_sub_prefix}:pull_request",
+  ]
 }
 
 ###############################################################################
@@ -160,10 +178,7 @@ data "aws_iam_policy_document" "github_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values = [
-        "${local.github_sub_prefix}:ref:refs/heads/main",
-        "${local.github_sub_prefix}:pull_request",
-      ]
+      values   = local.allowed_subs
     }
   }
 }
@@ -286,6 +301,8 @@ data "aws_iam_policy_document" "deploy" {
       "route53:GetHostedZone",
       "route53:ListResourceRecordSets",
       "route53:GetChange",
+      # The aws_route53_zone data source reads the zone's tags.
+      "route53:ListTagsForResource",
     ]
     resources = ["*"]
   }

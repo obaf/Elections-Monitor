@@ -43,19 +43,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # TEMPORARY -- prints the OIDC claims AWS is being asked to match, so the
-      # trust policy can be compared against reality. Prints selected claims
-      # only, never the raw token. Remove once the trust policy is confirmed.
-      - name: Debug OIDC claims
-        run: |
-          TOKEN="$(curl -sS \
-            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" \
-            | jq -r '.value')"
-          PAYLOAD="$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+')"
-          while [ $(( ${#PAYLOAD} % 4 )) -ne 0 ]; do PAYLOAD="${PAYLOAD}="; done
-          echo "$PAYLOAD" | base64 -d | jq '{iss, aud, sub, repository, repository_owner, repository_id, repository_owner_id, ref, event_name}'
-
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:

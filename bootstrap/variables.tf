@@ -22,6 +22,24 @@ variable "github_repo" {
   default     = "Elections-Monitor"
 }
 
+variable "github_owner_id" {
+  description = <<-EOT
+    Numeric GitHub account ID of github_owner, used in the immutable OIDC
+    subject claim. Find it with: gh api users/<owner> --jq .id
+  EOT
+  type        = string
+  default     = "26940333"
+}
+
+variable "github_repo_id" {
+  description = <<-EOT
+    Numeric GitHub repository ID, used in the immutable OIDC subject claim.
+    Find it with: gh api repos/<owner>/<repo> --jq .id
+  EOT
+  type        = string
+  default     = "1334822172"
+}
+
 variable "create_oidc_provider" {
   description = <<-EOT
     Create the GitHub Actions OIDC provider. Set to false if
