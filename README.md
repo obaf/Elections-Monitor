@@ -231,6 +231,19 @@ approving, and the running total updates in place. It reads `/admin/pending`,
 which follows whichever election is live — so during test mode it lists test
 uploads and approves into test totals.
 
+## Approving from the front page
+
+An admin sees **"Click to approve uploaded results: N uploads"** under the
+totals. `N` counts **polling units that have photos, not photos** — twenty
+photos of one unit is one decision to make, and the number an admin needs is
+how many decisions are waiting. It is read off the summary the page already
+holds, so the line costs no extra request.
+
+It links to [site/approve.html](site/approve.html), which lists only the polling
+units with uploads, newest decisions first, each opening to its photos with the
+OCR figures editable before approving. The page follows whichever election the
+server reports as live, so it works in test mode with no switch of its own.
+
 ## Archiving the Osun photos
 
 `python tools/archive_osun_photos.py` copies every Osun result sheet into

@@ -35,6 +35,11 @@
     </div>
     <p id="uploads-state" class="muted"></p>
     <p id="test-state" class="muted"></p>
+
+    <p id="approve-line" class="approve-line">
+      <span>Click to approve uploaded results:</span>
+      <a id="approve-link" href="/approve.html">0 uploads</a>
+    </p>
     <div id="test-banner" class="notice notice-test" role="status" hidden></div>
     <div id="uploads"></div>
     <div id="msgs" hidden></div>
@@ -223,7 +228,18 @@ function statusPill(st) {
   return '<span class="pill pill-none">Not added yet</span>';
 }
 
+async function paintApproveLine() {
+  try {
+    const r = await api('/admin/upload-counts');
+    if (!r.ok) return;
+    const { rows } = await r.json();
+    const n = (rows || []).filter((x) => x.uploads > 0).length;
+    $('#approve-link').textContent = `${nf.format(n)} upload${n === 1 ? '' : 's'}`;
+  } catch { /* the link still works, it just shows the last count */ }
+}
+
 async function loadUploads() {
+  paintApproveLine();
   $('#uploads').innerHTML = '<p class="muted">Loading…</p>';
   const r = await api('/admin/pending');
   if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }

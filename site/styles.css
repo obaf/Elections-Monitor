@@ -467,3 +467,51 @@ textarea, input[type=text], input[type=password] {
 
 .totals-row[data-election="test"] .totals-label { color: #8a6100; }
 .totals-row[data-election="test"] .tile { border-color: #e8cf8a; background: #fffdf6; }
+
+/* "Click to approve uploaded results: N uploads" -- admin only. The count is
+   polling units with photos, not photos, so it reads as a number of decisions
+   waiting rather than a volume of traffic. */
+.approve-line {
+  margin: 16px auto 0;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+.approve-line a {
+  font-weight: 700;
+  color: var(--brand-dark);
+  text-decoration: underline;
+}
+.approve-line a:hover { color: #0b6b3a; }
+
+/* One polling unit on the approve page: a header that opens the photos and the
+   figures beneath it, so the decision and the evidence stay together. */
+.pu-block { border: 1px solid var(--line); border-radius: 10px; background: var(--card); margin: 10px 0; }
+
+.pu-head {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: none;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.pu-head:hover { background: var(--bg); }
+.pu-head-main { display: flex; flex-direction: column; gap: 2px; }
+.pu-head-meta { display: flex; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; }
+.pu-head .chev { transition: transform .15s; display: inline-block; }
+.pu-head.open .chev { transform: rotate(90deg); }
+
+.pu-body { padding: 0 14px 14px; }
+.pu-body .card:first-child { margin-top: 0; }

@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Approve uploaded results — irev2.com</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+<div class="topbar">
+  <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE</span>
+  <a class="btn btn-small" href="/">← back to the portal</a>
+  <a class="btn btn-small" href="/admin.html">admin console</a>
+  <button id="admin-login-btn" class="btn btn-small">admin login</button>
+  <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
+</div>
+
+<div id="test-banner" class="notice notice-test" role="status" hidden>
+  TEST MODE IS ON. These are test uploads, kept separate from the real election
+  and deleted when test mode is switched off.
+</div>
+
+<div class="page">
+  <h1 id="title">Approve uploaded results</h1>
+  <p class="muted" id="intro">Loading…</p>
+
+  <div id="gate" hidden>
+    <p class="login-err">This page is for admins only. Please log in.</p>
+  </div>
+
+  <div id="panel" hidden>
+    <div class="toolbar">
+      <label class="grow">
+        <span>Search polling unit or ward</span>
+        <input id="q" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
+      </label>
+      <label class="chk">
+        <input id="hide-done" type="checkbox" checked>
+        Hide units already added
+      </label>
+    </div>
+
+    <div id="list"></div>
+  </div>
+</div>
+
+<dialog id="login-dlg" class="dlg">
+  <h2>Admin login</h2>
+  <p class="muted">Approving results is only available to admins.</p>
+  <label class="fld"><span>Username</span>
+    <input id="admin-u" type="text" autocomplete="username"></label>
+  <label class="fld"><span>Password</span>
+    <input id="admin-p" type="password" autocomplete="current-password"></label>
+  <p id="login-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="admin-go" class="btn btn-primary">Log in</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<datalist id="party-list"></datalist>
+<div id="toast" class="toast" hidden></div>
+
+<script>
+/* Only the polling units that actually have photos, with the approve controls
+   on the same row as the evidence.
+ *
+ * The count this page is reached by is a count of POLLING UNITS, not of
+ * photos: twenty photos of one unit is one thing to decide about, not twenty,
+ * and the number an admin needs is "how many decisions are waiting".
+ */
+const API = '/api';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const nf = new Intl.NumberFormat('en-NG');
+
+let DATA = null;          // polling-units.json
+let ROWS = [];            // [{ puCode, uploads, status }]
+let ELECTION = 'presidential';
+let TEST_MODE = false;
+const OCR = {};           // uploadId -> figures as Textract read them
+let adminToken = sessionStorage.getItem('irev2-admin') || '';
+const isAdmin = () => !!adminToken;
+
+function toast(msg, ms = 7000) {
+  const t = $('#toast');
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+const nameOf = (code) => DATA?.pus.find((p) => p[0] === code)?.[1] || code;
+const wardOf = (code) => {
+  const pu = DATA?.pus.find((p) => p[0] === code);
+  return pu ? DATA.wards[pu[2]][0] : '';
+};
+
+function statusPill(st) {
+  if (st === 'added') return '<span class="pill pill-added">Added to totals</span>';
+  if (st === 'revoked') return '<span class="pill pill-revoked">Revoked</span>';
+  return '<span class="pill pill-none">Waiting for approval</span>';
+}
+
+/* ------------------------------- the list -------------------------------- */
+
+function rowHtml(r) {
+  const n = r.uploads;
+  return `<div class="pu-block" data-pu="${esc(r.puCode)}">
+    <button class="pu-head" data-open="${esc(r.puCode)}">
+      <span class="pu-head-main">
+        <strong>${esc(nameOf(r.puCode))}</strong>
+        <span class="pu-code">${esc(r.puCode)}${wardOf(r.puCode) ? ' · ' + esc(wardOf(r.puCode)) : ''}</span>
+      </span>
+      <span class="pu-head-meta">
+        ${nf.format(n)} photo${n === 1 ? '' : 's'} ${statusPill(r.status)}
+        <span class="chev">▸</span>
+      </span>
+    </button>
+    <div class="pu-body" data-body="${esc(r.puCode)}" hidden></div>
+  </div>`;
+}
+
+function build() {
+  const q = $('#q').value.trim().toUpperCase();
+  const hideDone = $('#hide-done').checked;
+
+  const rows = ROWS.filter((r) => {
+    if (hideDone && r.status === 'added') return false;
+    if (!q) return true;
+    return nameOf(r.puCode).toUpperCase().includes(q) ||
+           r.puCode.includes(q) ||
+           wardOf(r.puCode).toUpperCase().includes(q);
+  });
+
+  // Units waiting on a decision come first; that is what the page is for.
+  rows.sort((a, b) => {
+    const rank = (x) => (x.status === 'added' ? 1 : 0);
+    return rank(a) - rank(b) || b.uploads - a.uploads;
+  });
+
+  $('#list').innerHTML = rows.length
+    ? rows.map(rowHtml).join('')
+    : `<p class="muted">${ROWS.length
+        ? 'No polling unit matches that filter.'
+        : 'No uploads have been made yet, so there is nothing to approve.'}</p>`;
+}
+
+function paintIntro() {
+  const waiting = ROWS.filter((r) => r.status !== 'added').length;
+  const total = ROWS.length;
+  const photos = ROWS.reduce((n, r) => n + r.uploads, 0);
+  $('#intro').innerHTML = total
+    ? `<strong>${nf.format(total)}</strong> polling unit${total === 1 ? '' : 's'} ` +
+      `${total === 1 ? 'has' : 'have'} uploads (${nf.format(photos)} photo${photos === 1 ? '' : 's'} in all). ` +
+      `<strong>${nf.format(waiting)}</strong> still waiting for approval.`
+    : 'No uploads have been made yet.';
+  $('#title').textContent = TEST_MODE
+    ? 'Approve uploaded results — TEST MODE'
+    : 'Approve uploaded results';
+}
+
+/* ----------------------------- one polling unit --------------------------- */
+
+const editRow = (party, votes) => `<tr>
+  <td><input class="p-in" type="text" value="${esc(party)}" maxlength="12"
+             placeholder="PARTY" autocapitalize="characters" list="party-list"></td>
+  <td><input class="v-in" type="number" min="0" step="1" value="${esc(votes)}" placeholder="0"></td>
+  <td><button class="row-x" data-delrow title="remove this party">&times;</button></td>
+</tr>`;
+
+async function openUnit(code) {
+  const body = document.querySelector(`[data-body="${CSS.escape(code)}"]`);
+  if (!body) return;
+  if (!body.hidden) { body.hidden = true; return; }
+
+  body.hidden = false;
+  body.innerHTML = '<p class="muted">Loading photos…</p>';
+  loadPartyList();
+
+  let data;
+  try {
+    data = await (await fetch(
+      `${API}/pu?code=${encodeURIComponent(code)}&election=${encodeURIComponent(ELECTION)}`)).json();
+  } catch {
+    body.innerHTML = '<p class="login-err">Could not load the photos for this unit.</p>';
+    return;
+  }
+
+  if (!data.uploads?.length) {
+    body.innerHTML = '<p class="muted">No photos found for this polling unit.</p>';
+    return;
+  }
+
+  body.innerHTML = data.uploads.map((u, i) => {
+    OCR[u.uploadId] = u.extracted || {};
+    const entries = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+    const table = `<table class="edit-tbl" data-edit="${esc(u.uploadId)}">
+        <thead><tr><th>Party</th><th>Votes</th><th></th></tr></thead>
+        <tbody>${entries.length ? entries.map(([p, v]) => editRow(p, v)).join('') : editRow('', '')}</tbody>
+      </table>`;
+    const badge = u.inOsun
+      ? '<span class="badge badge-ok">location in Osun</span>'
+      : '<span class="badge badge-no">no Osun location data</span>';
+
+    return `<div class="card">
+      <div><strong>Photo ${i + 1}</strong> · ${new Date(u.ts).toLocaleString()} · ${badge}
+           · <span class="pu-code">phone ${esc(u.device)}</span></div>
+      <img src="${esc(u.url)}" alt="Result sheet ${i + 1}" loading="lazy"
+           style="max-width:260px;display:block;margin:8px 0;border-radius:6px"
+           oncontextmenu="return false">
+      ${data.counted ? '' : `
+        <p class="muted">Check these against the photo, correct anything misread,
+           add any party that was missed, then approve.</p>
+        ${table}
+        <p class="edit-err" data-err="${esc(u.uploadId)}" hidden></p>
+        <div class="row">
+          <button class="btn" data-addrow="${esc(u.uploadId)}">+ add a party</button>
+          <button class="btn" data-reset="${esc(u.uploadId)}">reset to what was read</button>
+          <button class="btn btn-primary" data-approve="${esc(u.uploadId)}"
+                  data-pu="${esc(code)}">Approve these figures into the totals</button>
+        </div>`}
+    </div>`;
+  }).join('') + (data.counted
+    ? '<p class="done-note">This polling unit has already been added to the totals.</p>'
+    : '');
+}
+
+// Rejects blank names, duplicates and negatives rather than quietly dropping
+// them -- a silently discarded row would look as if it had been counted.
+function collectFigures(uploadId) {
+  const tbl = document.querySelector(`[data-edit="${CSS.escape(uploadId)}"]`);
+  if (!tbl) return { error: 'Could not read the figures table.' };
+  const figures = {};
+  for (const tr of [...tbl.tBodies[0].rows]) {
+    const pIn = tr.querySelector('.p-in');
+    const vIn = tr.querySelector('.v-in');
+    if (!pIn || !vIn) continue;
+    const party = pIn.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const raw = vIn.value.trim().replace(/[,\s]/g, '');
+    if (!party && raw === '') continue;
+    if (!party) return { error: 'Every row needs a party name.' };
+    if (raw === '') return { error: `Enter a score for ${party} — digits only.` };
+    const votes = Number(raw);
+    if (!Number.isInteger(votes) || votes < 0) {
+      return { error: `“${raw}” is not a valid score for ${party}. Use a whole number, zero or more.` };
+    }
+    if (figures[party] !== undefined) return { error: `${party} appears twice.` };
+    figures[party] = votes;
+  }
+  if (!Object.keys(figures).length) return { error: 'Enter at least one party and score.' };
+  return { figures };
+}
+
+async function approve(code, uploadId, btn) {
+  const err = document.querySelector(`[data-err="${CSS.escape(uploadId)}"]`);
+  const fail = (msg) => {
+    if (err) { err.textContent = msg; err.hidden = false; }
+    toast(msg, 10000);
+  };
+
+  const { figures, error } = collectFigures(uploadId);
+  if (error) { fail(error); return; }
+  if (err) err.hidden = true;
+
+  const original = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Approving…';
+  try {
+    const r = await fetch(`${API}/admin/approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ puCode: code, uploadId, figures, election: ELECTION }),
+    });
+    if (r.status === 401) {
+      adminToken = ''; sessionStorage.removeItem('irev2-admin');
+      refreshAdminUi();
+      fail('Your admin session expired. Please log in again, then approve.');
+      return;
+    }
+    let payload = {};
+    const text = await r.text();
+    try { payload = JSON.parse(text); }
+    catch { payload = { error: `Unexpected reply from the server (HTTP ${r.status}).` }; }
+
+    if (!r.ok) {
+      fail(payload.error || `Approve failed (HTTP ${r.status}).`);
+      btn.disabled = false; btn.textContent = original;
+      return;
+    }
+
+    const added = Object.entries(payload.added || figures)
+      .map(([p, v]) => `${p} ${nf.format(v)}`).join(', ');
+    toast(`Approved ${nameOf(code)} — added to the totals: ${added}`, 12000);
+    await load();
+  } catch {
+    fail('Could not reach the server. Nothing was changed — please try again.');
+    btn.disabled = false; btn.textContent = original;
+  }
+}
+
+/* --------------------------------- load ---------------------------------- */
+
+async function load() {
+  // The election follows whatever the server says is live, so this page works
+  // in test mode with no switch of its own.
+  try {
+    const s = await (await fetch(`${API}/summary?t=${Date.now()}`, { cache: 'no-store' })).json();
+    ELECTION = s.current || 'presidential';
+    TEST_MODE = !!s.testMode;
+  } catch { /* fall back to the defaults */ }
+  $('#test-banner').hidden = !TEST_MODE;
+
+  const r = await fetch(`${API}/admin/upload-counts?election=${encodeURIComponent(ELECTION)}`, {
+    headers: { authorization: `Bearer ${adminToken}` },
+  });
+  if (r.status === 401) {
+    adminToken = ''; sessionStorage.removeItem('irev2-admin');
+    refreshAdminUi();
+    toast('Your admin session expired. Please log in again.');
+    return;
+  }
+  if (!r.ok) { $('#intro').textContent = 'Could not load the uploads.'; return; }
+
+  const [units, data] = await Promise.all([
+    DATA ? Promise.resolve(DATA) : fetch('/polling-units.json').then((x) => x.json()),
+    r.json(),
+  ]);
+  DATA = units;
+  ROWS = (data.rows || []).filter((x) => x.uploads > 0);
+  paintIntro();
+  build();
+}
+
+async function loadPartyList() {
+  if ($('#party-list').childElementCount) return;
+  try {
+    const { parties } = await (await fetch(`${API}/parties?election=${encodeURIComponent(ELECTION)}`)).json();
+    $('#party-list').innerHTML = (parties || []).map((p) => `<option value="${esc(p)}"></option>`).join('');
+  } catch { /* the field still accepts free text */ }
+}
+
+/* --------------------------------- admin --------------------------------- */
+
+function refreshAdminUi() {
+  $('#admin-flag').hidden = !isAdmin();
+  $('#admin-login-btn').hidden = isAdmin();
+  $('#admin-logout-btn').hidden = !isAdmin();
+  $('#panel').hidden = !isAdmin();
+  $('#gate').hidden = isAdmin();
+  if (!isAdmin()) $('#intro').textContent = '';
+}
+
+$('#admin-login-btn').addEventListener('click', () => {
+  $('#login-err').hidden = true;
+  $('#login-dlg').showModal();
+});
+
+$('#admin-logout-btn').addEventListener('click', () => {
+  adminToken = ''; sessionStorage.removeItem('irev2-admin');
+  refreshAdminUi();
+  toast('Logged out of admin.');
+});
+
+$('#admin-go').addEventListener('click', async () => {
+  const err = $('#login-err');
+  err.hidden = true;
+  try {
+    const r = await fetch(`${API}/admin/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: $('#admin-u').value, password: $('#admin-p').value }),
+    });
+    if (!r.ok) { err.textContent = 'Invalid username or password.'; err.hidden = false; return; }
+    adminToken = (await r.json()).token;
+    sessionStorage.setItem('irev2-admin', adminToken);
+    $('#admin-p').value = '';
+    $('#login-dlg').close();
+    refreshAdminUi();
+    await load();
+  } catch {
+    err.textContent = 'Could not reach the server. Please try again.';
+    err.hidden = false;
+  }
+});
+
+/* -------------------------------- wiring --------------------------------- */
+
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-close]')) { e.target.closest('dialog')?.close(); return; }
+
+  const open = e.target.closest('[data-open]');
+  if (open) { openUnit(open.dataset.open); open.classList.toggle('open'); return; }
+
+  const addrow = e.target.closest('[data-addrow]');
+  if (addrow) {
+    const tbl = document.querySelector(`[data-edit="${CSS.escape(addrow.dataset.addrow)}"]`);
+    tbl?.tBodies[0].insertAdjacentHTML('beforeend', editRow('', ''));
+    return;
+  }
+  const delrow = e.target.closest('[data-delrow]');
+  if (delrow) {
+    const tr = delrow.closest('tr');
+    const tb = tr.parentElement;
+    tr.remove();
+    if (!tb.children.length) tb.insertAdjacentHTML('beforeend', editRow('', ''));
+    return;
+  }
+  const reset = e.target.closest('[data-reset]');
+  if (reset) {
+    const id = reset.dataset.reset;
+    const tbl = document.querySelector(`[data-edit="${CSS.escape(id)}"]`);
+    const entries = Object.entries(OCR[id] || {}).sort((a, b) => b[1] - a[1]);
+    tbl.tBodies[0].innerHTML = entries.length
+      ? entries.map(([p, v]) => editRow(p, v)).join('')
+      : editRow('', '');
+    const err = document.querySelector(`[data-err="${CSS.escape(id)}"]`);
+    if (err) err.hidden = true;
+    return;
+  }
+  const ap = e.target.closest('[data-approve]');
+  if (ap) approve(ap.dataset.pu, ap.dataset.approve, ap);
+});
+
+let debounce;
+$('#q').addEventListener('input', () => {
+  clearTimeout(debounce); debounce = setTimeout(build, 140);
+});
+$('#hide-done').addEventListener('change', build);
+
+refreshAdminUi();
+if (isAdmin()) load().catch(() => { $('#intro').textContent = 'Could not load the uploads.'; });
+</script>
+</body>
+</html>

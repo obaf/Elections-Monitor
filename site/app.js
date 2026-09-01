@@ -397,6 +397,15 @@ function refreshUploadUi() {
     b.title = on ? '' : 'Uploads are currently closed';
   });
 
+  /* "N uploads" counts POLLING UNITS with photos, not photos. Twenty photos of
+     one unit is one decision to make, and the number an admin needs is how many
+     decisions are waiting. Read straight off the summary the page already has,
+     so the line costs no extra request. */
+  const withUploads = Object.values(viewCounts()).filter(([n = 0]) => n > 0).length;
+  const line = $('#approve-line');
+  line.hidden = !isAdmin() || IS_ARCHIVE;
+  $('#approve-link').textContent = `${nf.format(withUploads)} upload${withUploads === 1 ? '' : 's'}`;
+
   const t = $('#uploads-toggle-btn');
   t.hidden = !isAdmin() || IS_ARCHIVE;
   t.textContent = on ? 'Disable uploads' : 'Enable uploads';

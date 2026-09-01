@@ -34,7 +34,12 @@ const SUMMARY = {
       id: 'presidential', label: 'Presidential Election Results', archived: false, ephemeral: false,
       display: ['NDC', 'APC', 'PDP', 'ADC'],
       totals: {},
-      counts: {},
+      // Deliberately lopsided: 9 photos across 2 polling units. The approve
+      // line must say 2, not 9.
+      counts: {
+        '29-01-01-001': [7, 0, ''],
+        '29-01-01-002': [2, 0, ''],
+      },
     },
   },
   totals: {},
@@ -89,11 +94,17 @@ async function render({ search = '', admin = false } = {}) {
 
   const fn = new Function(
     ...Object.keys(sandbox),
-    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows") };',
+    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows"), line: document.querySelector("#approve-line"), link: document.querySelector("#approve-link") };',
   );
   const out = fn(...Object.values(sandbox));
   await new Promise((r) => setTimeout(r, 40));   // let init()'s promises settle
-  return { totals: out.totals.innerHTML, rows: out.rows.innerHTML };
+  return {
+    totals: out.totals.innerHTML,
+    rows: out.rows.innerHTML,
+    approveHidden: out.line.hidden,
+    approveText: out.link.textContent,
+    approveHref: out.link.href ?? '/approve.html',
+  };
 }
 
 let fails = 0;
@@ -182,6 +193,32 @@ console.log('\nTEST MODE view (the server reports test as current)');
   ok('the test figures read 000', (testRow.match(/>000</g) || []).length === 4,
      `found ${(testRow.match(/>000</g) || []).length} of 4`);
   ok('the Osun figures are untouched by test mode', t.totals.includes('3,491'));
+}
+
+console.log('\nthe "Click to approve uploaded results" line');
+{
+  /* Set the state this block needs rather than inheriting whatever the block
+     above left behind -- the test-mode section mutates the shared SUMMARY, and
+     depending on that ordering is how a test starts passing for the wrong
+     reason (or, as here, failing for one). */
+  SUMMARY.current = 'presidential';
+  SUMMARY.testMode = false;
+  delete SUMMARY.elections.test;
+
+  // Admin only, and the count is POLLING UNITS with photos -- not photos.
+  const visitor = await render();
+  ok('hidden from an ordinary visitor', visitor.approveHidden === true);
+
+  const admin = await render({ admin: true });
+  ok('shown to an admin', admin.approveHidden === false);
+  ok('counts polling units, not photos (2 units / 9 photos)',
+     admin.approveText === '2 uploads', `got ${JSON.stringify(admin.approveText)}`);
+  ok('the link points at the approve page',
+     admin.approveHref === '/approve.html', admin.approveHref);
+
+  // A finished election has nothing to approve.
+  const arch = await render({ search: '?election=osun', admin: true });
+  ok('hidden on the Osun archive', arch.approveHidden === true);
 }
 
 console.log(`\n${fails ? 'FAILURES: ' + fails : 'ALL PASSED'}\n`);

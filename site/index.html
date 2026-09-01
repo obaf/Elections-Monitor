@@ -53,6 +53,13 @@
     <div id="totals"><p class="muted">Loading totals…</p></div>
   </section>
 
+  <!-- Admin only. The count is polling units with photos, not photos: twenty
+       photos of one unit is one decision, not twenty. -->
+  <p id="approve-line" class="approve-line" hidden>
+    <span>Click to approve uploaded results:</span>
+    <a id="approve-link" href="/approve.html">0 uploads</a>
+  </p>
+
   <div class="admin-actions">
     <a class="btn btn-breakdown" href="/breakdown.html">See Breakdown</a>
     <a id="archive-link" class="btn btn-breakdown" href="/?election=osun">View Osun election archive</a>
