@@ -32,7 +32,7 @@ const SUMMARY = {
     },
     presidential: {
       id: 'presidential', label: 'Presidential Election Results', archived: false,
-      display: ['NDC', 'APC', 'PDP'],
+      display: ['NDC', 'APC', 'PDP', 'ADC'],
       totals: {},
       counts: {},
     },
@@ -123,11 +123,17 @@ for (const [party, value] of [['ACCORD', '3,491'], ['APC', '2,046'], ['ADC', '17
 
 console.log('\n  the presidential row has a shape before any result exists');
 const presRow = live.totals.slice(live.totals.indexOf('Presidential Election Results'));
-for (const party of ['NDC', 'APC', 'PDP']) {
+const PRES_PARTIES = ['NDC', 'APC', 'PDP', 'ADC'];
+for (const party of PRES_PARTIES) {
   ok(`${party} is listed`, presRow.includes(`>${party}<`), presRow.slice(0, 300));
 }
-ok('its figures read 000', (presRow.match(/>000</g) || []).length === 3,
-   `found ${(presRow.match(/>000</g) || []).length} of 3`);
+ok('its figures read 000',
+   (presRow.match(/>000</g) || []).length === PRES_PARTIES.length,
+   `found ${(presRow.match(/>000</g) || []).length} of ${PRES_PARTIES.length}`);
+// ADC also appears in the Osun row with a real figure, so the placeholder must
+// be the presidential one and not a stray match from the row above.
+ok('ADC on the presidential row is a placeholder, not the Osun figure',
+   presRow.includes('>ADC<') && !presRow.includes('179'));
 ok('no Osun figure leaked into the presidential row',
    !presRow.includes('3,491') && !presRow.includes('2,046'));
 

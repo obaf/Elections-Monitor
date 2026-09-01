@@ -307,7 +307,7 @@ export const ELECTIONS = {
     id: 'presidential',
     label: 'Presidential Election Results',
     archived: false,
-    display: ['NDC', 'APC', 'PDP'],
+    display: ['NDC', 'APC', 'PDP', 'ADC'],
   },
 
   /* Test mode is a THIRD election, not a flag on the other two.
@@ -324,7 +324,7 @@ export const ELECTIONS = {
     label: 'TEST MODE Results',
     archived: false,
     ephemeral: true,
-    display: ['NDC', 'APC', 'PDP'],
+    display: ['NDC', 'APC', 'PDP', 'ADC'],
   },
 };
 

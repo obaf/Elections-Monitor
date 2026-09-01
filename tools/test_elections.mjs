@@ -88,7 +88,7 @@ console.log('\n5. The live election is the presidential one, and Osun is archive
 
 console.log('\n6. The parties shown on an empty presidential row are the ones on the ballot');
 {
-  const want = ['NDC', 'APC', 'PDP'];
+  const want = ['NDC', 'APC', 'PDP', 'ADC'];
   eq('display parties', JSON.stringify(ELECTIONS.presidential.display), JSON.stringify(want));
   // Discovery must recognise them on a real sheet, not invent them fresh.
   for (const p of want) ok(`${p} is in the seed party list`, PARTIES.includes(p));
