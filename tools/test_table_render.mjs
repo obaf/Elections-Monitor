@@ -5,16 +5,25 @@ import { readFileSync } from 'node:fs';
 
 const html = readFileSync('site/breakdown.html', 'utf8');
 const script = html.match(/<script>([\s\S]*)<\/script>/)[1];
+const puScript = readFileSync('site/pu-data.js', 'utf8');
 
-const UNITS = {
-  lgas: ['01 - ATAKUMOSA EAST'],
-  wards: [['01 - IWARA', 0]],
+/* The index/per-state shape the site serves nationally. The units live in a
+   separate file keyed by state, and the PU code is rebuilt from the ward. */
+const INDEX = {
+  v: 2,
+  states: [['OSUN', '29']],
+  lgas: [['01 - ATAKUMOSA EAST', 0]],
+  wards: [['01 - IWARA', 0, '29-01-01']],
+  counts: { '29': 5 },
+};
+const STATE_29 = {
+  state: '29',
   pus: [
-    ['29-01-01-001', 'TOWN HALL IWARA', 0],
-    ['29-01-01-002', 'UNITY PRY. SCHOOL, IWARA', 0],
-    ['29-01-01-003', 'L.A. SCHOOL, IWIKUN', 0],   // no photos at all
-    ['29-01-01-004', 'METHODIST PRY. SCHOOL', 0], // photos, not counted
-    ['29-01-01-005', 'L.A. PRY. SCHOOL', 0],      // revoked
+    ['001', 'TOWN HALL IWARA', 0],
+    ['002', 'UNITY PRY. SCHOOL, IWARA', 0],
+    ['003', 'L.A. SCHOOL, IWIKUN', 0],   // no photos at all
+    ['004', 'METHODIST PRY. SCHOOL', 0], // photos, not counted
+    ['005', 'L.A. PRY. SCHOOL', 0],      // revoked
   ],
 };
 
@@ -66,10 +75,20 @@ async function render({ admin }) {
     IntersectionObserver: class { observe() {} },
     fetch: async (url) => ({
       ok: true, status: 200,
-      json: async () => (url.includes('polling-units') ? UNITS : BREAKDOWN),
+      json: async () => {
+        if (url.includes('polling-units')) return INDEX;
+        if (/\/pu\/\d+\.json/.test(url)) return STATE_29;
+        return BREAKDOWN;
+      },
     }),
     setTimeout, clearTimeout, Intl, Date, Object, Array, JSON, console, String, Number,
   };
+
+  // pu-data.js is evaluated for real: its code-to-state routing decides which
+  // file the page fetches, so a fake would test nothing.
+  const fakeWindow = {};
+  new Function('window', 'fetch', puScript)(fakeWindow, sandbox.fetch);
+  sandbox.PU = fakeWindow.PU;
 
   const fn = new Function(...Object.keys(sandbox), script + '\n;return {head:document.querySelector("#head"),rows:document.querySelector("#rows"),foot:document.querySelector("#foot"),wd:document.querySelector("#withdrawn"),wdl:document.querySelector("#withdrawn-list"),intro:document.querySelector("#intro")};');
   const out = fn(...Object.values(sandbox));

@@ -70,6 +70,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script src="/pu-data.js"></script>
 <script>
 const API = '/api';
 const BATCH = 150;
@@ -77,7 +78,6 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const nf = new Intl.NumberFormat('en-NG');
 
-let DATA = null;
 let COUNTS = {};          // puCode -> { uploads, status }
 let rows = [];
 let rendered = 0;
@@ -123,11 +123,15 @@ function renderMore() {
 
 function build() {
   const q = $('#q').value.trim().toUpperCase();
-  rows = DATA.pus.filter(([code, name, wi]) => {
-    if (!COUNTS[code]) return false;
+  // Built from the counts, not from the national list: only units with photos
+  // can appear here at all.
+  rows = Object.keys(COUNTS).map((code) => {
+    const u = PU.unit(code);
+    return [code, u?.name || code, u?.ward || ''];
+  }).filter(([code, name, ward]) => {
     if (!q) return true;
     return name.toUpperCase().includes(q) || code.includes(q) ||
-           DATA.wards[wi][0].toUpperCase().includes(q);
+           String(ward).toUpperCase().includes(q);
   });
   // Most-uploaded first: that is the list an admin is actually scanning for.
   rows.sort((a, b) => COUNTS[b[0]].uploads - COUNTS[a[0]].uploads);
@@ -163,13 +167,10 @@ async function load() {
   }
   if (!r.ok) { $('#intro').textContent = 'Could not load upload counts.'; return; }
 
-  const [units, data] = await Promise.all([
-    DATA ? Promise.resolve(DATA) : fetch('/polling-units.json').then((x) => x.json()),
-    Promise.resolve(await r.json()),
-  ]);
-  DATA = units;
+  const [, data] = await Promise.all([PU.loadIndex(), Promise.resolve(await r.json())]);
   COUNTS = {};
   for (const row of data.rows || []) COUNTS[row.puCode] = row;
+  await PU.ensureFor(Object.keys(COUNTS));
   build();
 }
 

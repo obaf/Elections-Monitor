@@ -97,11 +97,37 @@ portal costs essentially nothing. Textract runs exactly once per photo.
 SSM Parameter Store at `/irev2/admin`, which the Lambda reads at runtime. The
 password is not in the repo or in Terraform state.
 
-## Regenerating the polling unit list
+## The polling unit list
 
-`site/polling-units.json` is derived from `osun-polling-units.csv` (gitignored).
-Ward and LGA names are de-duplicated into index arrays to keep the payload at
-194 KB, roughly 35 KB over the wire.
+The portal covers **all 176,595 polling units in Nigeria** — 37 states, 774
+LGAs, 8,809 wards — built by `tools/build_national_pu.py` from the INEC dataset
+at [sadiqsalau/inec-ng-data](https://github.com/sadiqsalau/inec-ng-data).
+
+It produces `presidential-polling-units.csv` and `.xlsx` (both gitignored, like
+the Osun originals) and the two things the site serves:
+
+| File | What | Size |
+|---|---|---|
+| `site/polling-units.json` | states + LGAs + wards — the index | 320 KB, **80 KB gzipped** |
+| `site/pu/<state>.json` | one state's units, fetched on demand | 84–610 KB, 21–148 KB gzipped |
+
+**Why it is split.** All 176,595 units in one file is 1.8 MB over the wire even
+gzipped — a quarter-minute of waiting on the mobile connections this portal is
+actually used on. The split works because a PU code *begins with its state*
+(`29-30-04-003` is Osun), so the first thing a searcher types already says which
+file to fetch. A typical visit downloads the index plus one state, about
+**119 KB**, which keeps the front page inside the cost shape the whole design
+rests on.
+
+The PU code is not stored per unit either: it is rebuilt in the browser from
+the ward's prefix plus the unit's serial, which would otherwise add ~2 MB of
+information already implied by the ward.
+
+**The build refuses to run if Osun does not reproduce.** The PU code keys every
+upload, counter and total on the portal, so `build_national_pu.py` rebuilds
+Osun's codes from the national source and checks them against the 3,763 rows
+already in use. All 3,763 match exactly, which is what makes the national list
+safe to swap in: existing Osun uploads still resolve to the same units.
 
 ## AWS Resources Used
 

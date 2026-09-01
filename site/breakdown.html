@@ -36,7 +36,7 @@
     </label>
     <label class="chk" id="all-wrap" hidden>
       <input id="show-all" type="checkbox">
-      Show every polling unit
+      Show every polling unit in these states
     </label>
     <button id="audit-btn" class="btn" hidden>View audit log</button>
   </div>
@@ -89,6 +89,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script src="/pu-data.js"></script>
 <script>
 const API = '/api';
 const BATCH = 120;
@@ -96,7 +97,8 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const nf = new Intl.NumberFormat('en-NG');
 
-let DATA = null;          // polling-units.json
+/* Names come from PU, which loads only the states the results actually
+   mention -- 176,595 units are not downloaded to label a few hundred rows. */
 let BD = {};              // puCode -> { uploads, status, results, reason, revokedFigures }
 let PARTIES = [];         // column order
 let rows = [];
@@ -119,7 +121,7 @@ function toast(msg, ms = 6000) {
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
-const nameOf = (code) => DATA?.pus.find((p) => p[0] === code)?.[1] || code;
+const nameOf = (code) => PU.nameOf(code);
 
 function statusOf(code) {
   const st = BD[code]?.status;
@@ -195,18 +197,25 @@ function build() {
   const q = $('#q').value.trim().toUpperCase();
   const all = isAdmin() && $('#show-all').checked;
 
-  rows = DATA.pus.filter(([code, name, wi]) => {
-    if (!all) {
-      const st = BD[code]?.status;
-      // The public table is the tabulation of counted results. Admins also see
-      // units that have photos but no counted result yet.
-      const shown = isAdmin() ? !!BD[code] : st === 'added';
-      if (!shown) return false;
-    }
+  /* Built from the RESULTS, not from the polling unit list. Scanning 176,595
+     units to find the few hundred with a result would be the wrong way round,
+     and would need every state downloaded to do it. "Show every polling unit"
+     widens to the states those results are in, which are the only ones loaded. */
+  const source = all
+    ? PU.loadedUnits().map((u) => [u.code, u.name, u.ward])
+    : Object.keys(BD)
+        .filter((code) => (isAdmin() ? true : BD[code]?.status === 'added'))
+        .map((code) => {
+          const u = PU.unit(code);
+          return [code, u?.name || code, u?.ward || ''];
+        });
+
+  rows = source.filter(([code, name, ward]) => {
     if (!q) return true;
     return name.toUpperCase().includes(q) || code.includes(q) ||
-           DATA.wards[wi][0].toUpperCase().includes(q);
+           String(ward).toUpperCase().includes(q);
   });
+  rows.sort((a, b) => a[0].localeCompare(b[0]));
 
   rendered = 0;
   $('#rows').innerHTML = '';
@@ -259,13 +268,14 @@ function describe() {
 }
 
 async function load() {
-  const [units, bd] = await Promise.all([
-    fetch('/polling-units.json').then((r) => r.json()),
+  const [, bd] = await Promise.all([
+    PU.loadIndex(),
     fetch(`${API}/breakdown${q()}`).then((r) => r.json()),
   ]);
-  DATA = units;
   BD = {};
   for (const r of bd.rows || []) BD[r.puCode] = r;
+  // Pull only the states these results are in.
+  await PU.ensureFor(Object.keys(BD));
 
   // Fixed alphabetical order. A real election brings far more parties than any
   // sample, and columns must not shuffle as figures arrive -- a party has to
@@ -418,7 +428,7 @@ $('#q').addEventListener('input', () => {
 });
 $('#show-all').addEventListener('change', build);
 
-new IntersectionObserver((en) => { if (en[0].isIntersecting && DATA) renderMore(); },
+new IntersectionObserver((en) => { if (en[0].isIntersecting && PU.index) renderMore(); },
   { rootMargin: '400px' }).observe($('#sentinel'));
 
 /* The page is a different document depending on the election, so say which one

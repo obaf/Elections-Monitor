@@ -77,8 +77,10 @@
 <main>
   <div class="searches">
     <label>
-      <span>Search your polling unit</span>
-      <input id="q-pu" type="search" placeholder="e.g. TOWN HALL IWARA" autocomplete="off">
+      <span>Search PU with full PU code:<br>
+        Format is as follows: [State]-[LGA]-[Reg Area(sometimes called Ward)]-[PU]
+        e.g. Ogo-Oluwa Kitan II in Osun state has full PU code as “29-30-04-003”</span>
+      <input id="q-pu" type="search" placeholder="e.g. 29-30-04-003" autocomplete="off">
     </label>
     <label>
       <span>Search by ward</span>
@@ -156,6 +158,7 @@
 
 <div id="toast" class="toast" hidden></div>
 
+<script src="/pu-data.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

@@ -9,13 +9,23 @@
 import { readFileSync } from 'node:fs';
 
 const script = readFileSync('site/app.js', 'utf8');
+const puScript = readFileSync('site/pu-data.js', 'utf8');
 
-const UNITS = {
-  lgas: ['01 - ATAKUMOSA EAST'],
-  wards: [['01 - IWARA', 0]],
+/* The real index/per-state shape the site now serves: the units live in a
+   separate file keyed by state, and the PU code is rebuilt from the ward's
+   prefix rather than stored on every row. */
+const INDEX = {
+  v: 2,
+  states: [['OSUN', '29']],
+  lgas: [['01 - ATAKUMOSA EAST', 0]],
+  wards: [['01 - IWARA', 0, '29-01-01']],
+  counts: { '29': 2 },
+};
+const STATE_29 = {
+  state: '29',
   pus: [
-    ['29-01-01-001', 'TOWN HALL IWARA', 0],
-    ['29-01-01-002', 'UNITY PRY. SCHOOL, IWARA', 0],
+    ['001', 'TOWN HALL IWARA', 0],
+    ['002', 'UNITY PRY. SCHOOL, IWARA', 0],
   ],
 };
 
@@ -83,7 +93,7 @@ function makeEl() {
   };
 }
 
-async function render({ search = '', admin = false, openPu = null } = {}) {
+async function render({ search = '', admin = false, openPu = null, query = null } = {}) {
   const els = new Map();
   const dangerOn = new Set();
   const el = (id) => {
@@ -128,7 +138,8 @@ async function render({ search = '', admin = false, openPu = null } = {}) {
       ok: true, status: 200,
       text: async () => JSON.stringify(PU_RESPONSE),
       json: async () => {
-        if (url.includes('polling-units')) return UNITS;
+        if (url.includes('polling-units')) return INDEX;
+        if (/\/pu\/\d+\.json/.test(url)) return STATE_29;
         if (url.includes('/pu?')) return PU_RESPONSE;
         if (url.includes('/parties')) return { parties: [] };
         return SUMMARY;
@@ -137,12 +148,27 @@ async function render({ search = '', admin = false, openPu = null } = {}) {
     setTimeout, clearTimeout, Intl, Date, Object, Array, JSON, console, String, Number, Math,
   };
 
+  /* pu-data.js is evaluated for real rather than stubbed: the code-to-state
+     routing it does is the thing that decides which file the page fetches, so
+     a fake would test nothing. */
+  const fakeWindow = {};
+  new Function('window', 'fetch', puScript)(fakeWindow, sandbox.fetch);
+  sandbox.PU = fakeWindow.PU;
+
   const fn = new Function(
     ...Object.keys(sandbox),
-    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows"), line: document.querySelector("#approve-line"), link: document.querySelector("#approve-link"), toggleExtract };',
+    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows"), line: document.querySelector("#approve-line"), link: document.querySelector("#approve-link"), toggleExtract, applyFilter };',
   );
   const out = fn(...Object.values(sandbox));
   await new Promise((r) => setTimeout(r, 40));   // let init()'s promises settle
+
+  /* The grid is search-driven now: with 176,595 units nationally it does not
+     list everything, so a test that wants rows has to ask for them. */
+  if (query !== null) {
+    els.get('q-pu').value = query;
+    await out.applyFilter();
+    await new Promise((r) => setTimeout(r, 40));
+  }
 
   /* Open one polling unit's detail row, which is where the figures under a
      photo are drawn. Driven through the real toggleExtract rather than by
@@ -158,6 +184,7 @@ async function render({ search = '', admin = false, openPu = null } = {}) {
 
   return {
     detail,
+    countLine: els.get('count-line')?.textContent ?? '',
     uploadsBtn: els.get('uploads-toggle-btn')?.textContent ?? '',
     testBtnDanger: dangerOn.has('test-toggle-btn'),
     totals: out.totals.innerHTML,
@@ -209,9 +236,17 @@ ok('ADC on the presidential row is a placeholder, not the Osun figure',
 ok('no Osun figure leaked into the presidential row',
    !presRow.includes('3,491') && !presRow.includes('2,046'));
 
-console.log('\n  uploads are closed, so the grid offers no upload button');
-ok('upload buttons are rendered but disabled, not missing',
-   live.rows.includes('btn-up'), 'the live election still lists its units');
+console.log('\n  the grid is search-driven, not a list of the whole country');
+ok('with an empty search it prompts rather than listing 176k units',
+   live.rows === '' && /Enter your full PU code/.test(live.countLine), live.countLine);
+
+const searched = await render({ query: '29-01-01' });
+ok('searching a PU code renders the matching units',
+   searched.rows.includes('TOWN HALL IWARA'), searched.rows.slice(0, 200));
+ok('and the code is shown in full on the row',
+   searched.rows.includes('29-01-01-001'), searched.rows.slice(0, 200));
+ok('the upload button is present but disabled while uploads are closed',
+   searched.rows.includes('btn-up'), searched.rows.slice(0, 200));
 
 console.log('\nARCHIVE view (?election=osun)');
 const arch = await render({ search: '?election=osun' });
@@ -219,8 +254,11 @@ ok('still shows both labelled rows', (arch.totals.match(/totals-row/g) || []).le
 ok('the archive grid drops the upload button entirely',
    !arch.rows.includes('btn-up'),
    'a finished election must not offer an upload control');
-ok('the archive grid still lists polling units', arch.rows.includes('TOWN HALL IWARA'));
-ok('and still offers the extracted result', arch.rows.includes('view extracted result'));
+const archSearched = await render({ search: '?election=osun', query: '29-01-01' });
+ok('the archive grid still lists polling units when searched',
+   archSearched.rows.includes('TOWN HALL IWARA'), archSearched.rows.slice(0, 200));
+ok('and still offers the extracted result', archSearched.rows.includes('view extracted result'));
+ok('but never an upload button', !archSearched.rows.includes('btn-up'));
 
 console.log('\nTEST MODE view (the server reports test as current)');
 {

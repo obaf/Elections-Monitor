@@ -3,7 +3,6 @@
 
 const API = '/api';
 const BATCH = 150;               // rows rendered per scroll step
-let DATA = null;                 // { lgas, wards, pus }
 let SUMMARY = { totals: {}, counts: {}, elections: {}, current: 'presidential', uploadsEnabled: false };
 let filtered = [];
 let rendered = 0;
@@ -123,9 +122,7 @@ function uploadLabel(code) {
 }
 
 function rowHtml(pu) {
-  const [code, name, wardIdx] = pu;
-  const [wardName, lgaIdx] = DATA.wards[wardIdx];
-  const lga = DATA.lgas[lgaIdx];
+  const { code, name, ward: wardName, lga } = pu;
   const [n = 0] = viewCounts()[code] || [];
   return `<tr data-code="${esc(code)}">
     <td class="col-upload">
@@ -157,17 +154,52 @@ function renderMore() {
     : '';
 }
 
-function applyFilter() {
-  const qp = $('#q-pu').value.trim().toUpperCase();
-  const qw = $('#q-ward').value.trim().toUpperCase();
-  filtered = DATA.pus.filter(([code, name, wi]) => {
-    if (qp && !name.toUpperCase().includes(qp) && !code.includes(qp)) return false;
-    if (qw && !DATA.wards[wi][0].toUpperCase().includes(qw)) return false;
-    return true;
-  });
+/* The country is 176,595 polling units and they are not all downloaded, so the
+   grid is driven by the search rather than listing everything. A PU code names
+   its own state, which is what makes one small fetch enough to answer it. */
+let searchSeq = 0;
+
+async function applyFilter() {
+  const qp = $('#q-pu').value.trim();
+  const qw = $('#q-ward').value.trim();
+  const seq = ++searchSeq;
+
+  const show = (msg) => {
+    filtered = [];
+    rendered = 0;
+    $('#rows').innerHTML = '';
+    $('#more').textContent = '';
+    $('#count-line').textContent = msg;
+  };
+
+  if (!qp && !qw) {
+    show(`${nf.format(PU.total)} polling units across ${PU.states.length} states. ` +
+         'Enter your full PU code above to find yours.');
+    return;
+  }
+
+  show('Searching…');
+  let res;
+  try {
+    res = await PU.search({ code: qp, ward: qw });
+  } catch {
+    if (seq === searchSeq) show('Could not load the polling unit list. Please try again.');
+    return;
+  }
+  if (seq !== searchSeq) return;   // a later keystroke already superseded this
+
+  if (res.needsNarrowing) {
+    show(`That ward name matches ${res.states.length} states. ` +
+         'Add the PU code, or more of the ward name, to narrow it down.');
+    return;
+  }
+
+  filtered = res.units;
   rendered = 0;
   $('#rows').innerHTML = '';
-  $('#count-line').textContent = `${nf.format(filtered.length)} polling unit${filtered.length === 1 ? '' : 's'}`;
+  $('#count-line').textContent = filtered.length
+    ? `${nf.format(filtered.length)} polling unit${filtered.length === 1 ? '' : 's'}`
+    : 'No polling unit matches that. Check the code against your result sheet.';
   renderMore();
 }
 
@@ -708,8 +740,8 @@ document.addEventListener('click', (e) => {
       return;
     }
     pendingPu = code;
-    const pu = DATA?.pus.find((p) => p[0] === code);
-    $('#source-pu').textContent = pu ? `${pu[1]} · ${code}` : code;
+    const pu = PU.unit(code);
+    $('#source-pu').textContent = pu ? `${pu.name} · ${code}` : code;
     $('#source-dlg').showModal();
   } else if (act === 'extract') {
     toggleExtract(code, btn.closest('tr'));
@@ -727,7 +759,7 @@ let debounce;
 });
 
 new IntersectionObserver((entries) => {
-  if (entries[0].isIntersecting && DATA) renderMore();
+  if (entries[0].isIntersecting && PU.index) renderMore();
 }, { rootMargin: '400px' }).observe($('#sentinel'));
 
 /* /summary carries max-age=15 so ordinary page loads stay cheap. Straight after
@@ -770,7 +802,7 @@ function paintView() {
   paintView();
   refreshAdminUi();
   try {
-    DATA = await (await fetch('/polling-units.json')).json();
+    await PU.loadIndex();
   } catch {
     $('#count-line').textContent = 'Could not load the polling unit list.';
     return;

@@ -42,6 +42,8 @@ prompt-v2.docx
 ~$*.docx
 osun-polling-units.xlsx
 osun-polling-units.csv
+presidential-polling-units.xlsx
+presidential-polling-units.csv
 .admin-ssm.json
 
 # Lambda build artefact
