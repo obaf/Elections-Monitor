@@ -53,6 +53,11 @@ function toast(msg, ms = 7000) {
   toast._t = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+// Same canonical form the server uses to decide whether two photos agree, so
+// "these differ" means the same thing on both sides.
+const signatureOf = (r) =>
+  Object.keys(r || {}).sort().map((k) => `${k}=${r[k]}`).join(',');
+
 /* ------------------------------- totals --------------------------------- */
 
 /* Each election gets its own labelled row, so the finished Osun figures and
@@ -275,11 +280,30 @@ async function toggleExtract(code, tr) {
     return;
   }
 
+  /* Once a unit is counted, the figures under the photo are the ones that were
+     APPROVED, not the ones OCR read. Extraction is often wrong and the admin
+     corrects it before approving; showing the raw extraction afterwards would
+     contradict the totals the same page is displaying. */
+  const approved = data.counted ? (data.results || {}) : null;
+
   const cards = data.uploads.map((u, i) => {
-    const rows = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+    const ocr = u.extracted || {};
+    const shown = approved || ocr;
+    const rows = Object.entries(shown).sort((a, b) => b[1] - a[1]);
+    const amended = approved && signatureOf(approved) !== signatureOf(ocr);
+
+    const caption = approved
+      ? `<p class="fig-caption">Approved figures${amended ? ' — corrected before approval' : ''}</p>`
+      : '';
+    const wasRead = amended
+      ? `<p class="fig-was muted">Originally read: ${
+          Object.entries(ocr).sort((a, b) => b[1] - a[1])
+            .map(([p, v]) => `${esc(p)} ${nf.format(v)}`).join(', ') || 'nothing'}</p>`
+      : '';
+
     const table = rows.length
-      ? `<table><tbody>${rows.map(([p, v]) =>
-          `<tr><th>${esc(p)}</th><td>${nf.format(v)}</td></tr>`).join('')}</tbody></table>`
+      ? caption + `<table><tbody>${rows.map(([p, v]) =>
+          `<tr><th>${esc(p)}</th><td>${nf.format(v)}</td></tr>`).join('')}</tbody></table>` + wasRead
       : `<p class="muted">No party figures could be read from this photo.</p>`;
     const badge = u.inOsun
       ? '<span class="badge badge-ok">location in Osun</span>'
@@ -408,8 +432,10 @@ function refreshUploadUi() {
 
   const t = $('#uploads-toggle-btn');
   t.hidden = !isAdmin() || IS_ARCHIVE;
-  t.textContent = on ? 'Disable uploads' : 'Enable uploads';
-  t.classList.toggle('btn-danger', on);
+  // Names the switch and its state: "Disable uploads: ON" means uploads are
+  // currently blocked.
+  t.textContent = `Disable uploads: ${on ? 'OFF' : 'ON'}`;
+  t.classList.toggle('btn-danger', !on);
 }
 
 function refreshAdminUi() {

@@ -30,7 +30,7 @@
     </div>
 
     <div class="row">
-      <button id="uploads-toggle" class="btn">Enable/Disable uploads</button>
+      <button id="uploads-toggle" class="btn">Disable uploads: …</button>
       <button id="test-toggle" class="btn">Enable test mode</button>
     </div>
     <p id="uploads-state" class="muted"></p>
@@ -74,7 +74,12 @@ function paintUploadState() {
   $('#uploads-state').innerHTML = uploadsEnabled
     ? 'Uploads are <strong>OPEN</strong> — the public can send in result photos.'
     : 'Uploads are <strong>CLOSED</strong> — the public can view results but cannot upload.';
-  $('#uploads-toggle').textContent = uploadsEnabled ? 'Disable uploads' : 'Enable uploads';
+  /* The label names the switch and its state, not the action: "Disable
+     uploads: ON" means uploads are currently blocked. A button that only ever
+     said "Enable uploads" left the current state to be inferred from which
+     word was showing, which is exactly backwards when the state matters. */
+  $('#uploads-toggle').textContent = `Disable uploads: ${uploadsEnabled ? 'OFF' : 'ON'}`;
+  $('#uploads-toggle').classList.toggle('btn-danger', !uploadsEnabled);
 
   $('#test-toggle').textContent = testMode ? 'Disable test mode' : 'Enable test mode';
   $('#test-toggle').classList.toggle('btn-danger', testMode);

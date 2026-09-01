@@ -194,9 +194,24 @@ async function openUnit(code) {
     return;
   }
 
+  /* After approval the figures shown are the APPROVED ones, not what OCR read:
+     the admin corrects the extraction before approving, and showing the raw
+     extraction afterwards would contradict the totals it produced. */
+  const approved = data.counted ? (data.results || {}) : null;
+  const sig = (r) => Object.keys(r || {}).sort().map((k) => `${k}=${r[k]}`).join(',');
+
   body.innerHTML = data.uploads.map((u, i) => {
     OCR[u.uploadId] = u.extracted || {};
     const entries = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+    const amended = approved && sig(approved) !== sig(u.extracted || {});
+    const finalRows = Object.entries(approved || {}).sort((a, b) => b[1] - a[1]);
+    const finalTable = approved
+      ? `<p class="fig-caption">Approved figures${amended ? ' — corrected before approval' : ''}</p>
+         <table class="fig-final"><tbody>${finalRows.map(([p, v]) =>
+            `<tr><th>${esc(p)}</th><td>${nf.format(v)}</td></tr>`).join('')}</tbody></table>
+         ${amended ? `<p class="fig-was muted">Originally read: ${
+            entries.map(([p, v]) => `${esc(p)} ${nf.format(v)}`).join(', ') || 'nothing'}</p>` : ''}`
+      : '';
     const table = `<table class="edit-tbl" data-edit="${esc(u.uploadId)}">
         <thead><tr><th>Party</th><th>Votes</th><th></th></tr></thead>
         <tbody>${entries.length ? entries.map(([p, v]) => editRow(p, v)).join('') : editRow('', '')}</tbody>
@@ -211,7 +226,7 @@ async function openUnit(code) {
       <img src="${esc(u.url)}" alt="Result sheet ${i + 1}" loading="lazy"
            style="max-width:260px;display:block;margin:8px 0;border-radius:6px"
            oncontextmenu="return false">
-      ${data.counted ? '' : `
+      ${data.counted ? finalTable : `
         <p class="muted">Check these against the photo, correct anything misread,
            add any party that was missed, then approve.</p>
         ${table}

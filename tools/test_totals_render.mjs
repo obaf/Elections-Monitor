@@ -19,6 +19,25 @@ const UNITS = {
   ],
 };
 
+/* A polling unit that was counted with CORRECTED figures: OCR misread APC as
+   100 and missed NDC entirely, and the admin fixed both before approving. The
+   page must show what was approved, not what was read. */
+let PU_RESPONSE = {
+  election: 'presidential',
+  archived: false,
+  counted: true,
+  status: 'added',
+  results: { APC: 100, NDC: 300, ADC: 1, PDP: 1 },
+  uploads: [{
+    uploadId: 'u1',
+    ts: '2026-09-01T23:20:58.000Z',
+    url: '/photos/presidential/29-01-01-002/a.jpg',
+    extracted: { APC: 180, ADC: 1, PDP: 1 },
+    inOsun: false,
+    device: 'f320a7',
+  }],
+};
+
 // Shaped exactly like the live /api/summary response.
 const SUMMARY = {
   current: 'presidential',
@@ -51,17 +70,36 @@ function makeEl() {
     innerHTML: '', textContent: '', value: '', hidden: false, checked: false,
     disabled: false, title: '', dataset: {},
     classList: { toggle() {}, add() {}, remove() {} },
+    _id: '',
     addEventListener() {},
     insertAdjacentHTML(_pos, h) { this.innerHTML += h; },
     showModal() {}, close() {},
     closest() { return null; },
     querySelector() { return makeEl(); },
+    // toggleExtract builds a detail row and inserts it after the unit's row.
+    after(node) { this.nextElementSibling = node; },
+    remove() {},
+    nextElementSibling: null,
   };
 }
 
-async function render({ search = '', admin = false } = {}) {
+async function render({ search = '', admin = false, openPu = null } = {}) {
   const els = new Map();
-  const el = (id) => { if (!els.has(id)) els.set(id, makeEl()); return els.get(id); };
+  const dangerOn = new Set();
+  const el = (id) => {
+    if (!els.has(id)) {
+      const e = makeEl();
+      e._id = id;
+      // Record .btn-danger toggles so "is the test button red?" is observable.
+      e.classList = {
+        toggle: (cls, on) => { if (cls === 'btn-danger') { on ? dangerOn.add(id) : dangerOn.delete(id); } },
+        add: (cls) => { if (cls === 'btn-danger') dangerOn.add(id); },
+        remove: (cls) => { if (cls === 'btn-danger') dangerOn.delete(id); },
+      };
+      els.set(id, e);
+    }
+    return els.get(id);
+  };
   const store = new Map();
   if (admin) store.set('irev2-admin', 'fake.token');
 
@@ -70,6 +108,7 @@ async function render({ search = '', admin = false } = {}) {
       querySelector: (s) => (s.startsWith('#') ? el(s.slice(1)) : makeEl()),
       querySelectorAll: () => [],
       addEventListener() {},
+      createElement: () => makeEl(),
     },
     location: { search },
     URLSearchParams,
@@ -87,18 +126,40 @@ async function render({ search = '', admin = false } = {}) {
     IntersectionObserver: class { observe() {} },
     fetch: async (url) => ({
       ok: true, status: 200,
-      json: async () => (url.includes('polling-units') ? UNITS : SUMMARY),
+      text: async () => JSON.stringify(PU_RESPONSE),
+      json: async () => {
+        if (url.includes('polling-units')) return UNITS;
+        if (url.includes('/pu?')) return PU_RESPONSE;
+        if (url.includes('/parties')) return { parties: [] };
+        return SUMMARY;
+      },
     }),
     setTimeout, clearTimeout, Intl, Date, Object, Array, JSON, console, String, Number, Math,
   };
 
   const fn = new Function(
     ...Object.keys(sandbox),
-    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows"), line: document.querySelector("#approve-line"), link: document.querySelector("#approve-link") };',
+    script + '\n;return { totals: document.querySelector("#totals"), rows: document.querySelector("#rows"), line: document.querySelector("#approve-line"), link: document.querySelector("#approve-link"), toggleExtract };',
   );
   const out = fn(...Object.values(sandbox));
   await new Promise((r) => setTimeout(r, 40));   // let init()'s promises settle
+
+  /* Open one polling unit's detail row, which is where the figures under a
+     photo are drawn. Driven through the real toggleExtract rather than by
+     re-implementing its markup here. */
+  let detail = '';
+  if (openPu) {
+    const tr = makeEl();
+    tr.classList = { contains: () => false, toggle() {}, add() {}, remove() {} };
+    await out.toggleExtract(openPu, tr);
+    await new Promise((r) => setTimeout(r, 40));
+    detail = tr.nextElementSibling ? tr.nextElementSibling.innerHTML : '';
+  }
+
   return {
+    detail,
+    uploadsBtn: els.get('uploads-toggle-btn')?.textContent ?? '',
+    testBtnDanger: dangerOn.has('test-toggle-btn'),
     totals: out.totals.innerHTML,
     rows: out.rows.innerHTML,
     approveHidden: out.line.hidden,
@@ -219,6 +280,74 @@ console.log('\nthe "Click to approve uploaded results" line');
   // A finished election has nothing to approve.
   const arch = await render({ search: '?election=osun', admin: true });
   ok('hidden on the Osun archive', arch.approveHidden === true);
+}
+
+console.log('\nfigures shown under a photo after approval');
+{
+  SUMMARY.current = 'presidential';
+  SUMMARY.testMode = false;
+  delete SUMMARY.elections.test;
+
+  const r = await render({ admin: true, openPu: '29-01-01-002' });
+  const d = r.detail;
+
+  ok('the approved figures are shown', /APC[^]*?100/.test(d) && /NDC[^]*?300/.test(d),
+     d.slice(0, 400));
+  ok('the misread extraction is NOT shown as the result',
+     !/<td>180<\/td>/.test(d), 'APC 180 was what OCR read, not what was approved');
+  ok('the figures are captioned as approved', /Approved figures/.test(d), d.slice(0, 300));
+  ok('and flagged as corrected', /corrected before approval/.test(d));
+  ok('what OCR originally read is still visible for reference',
+     /Originally read:/.test(d) && /180/.test(d));
+
+  // A unit that has NOT been counted still shows the extraction, uncaptioned.
+  PU_RESPONSE = {
+    ...PU_RESPONSE, counted: false, status: 'pending', results: {},
+  };
+  const p = await render({ openPu: '29-01-01-002' });
+  ok('an uncounted unit shows the extraction', /<td>180<\/td>/.test(p.detail), p.detail.slice(0, 300));
+  ok('with no approved caption', !/Approved figures/.test(p.detail));
+}
+
+console.log('\nthe uploads button names its switch and its state');
+{
+  SUMMARY.current = 'presidential';
+  SUMMARY.testMode = false;
+  delete SUMMARY.elections.test;
+
+  SUMMARY.uploadsEnabled = false;
+  const off = await render({ admin: true });
+  ok('uploads blocked reads "Disable uploads: ON"',
+     off.uploadsBtn === 'Disable uploads: ON', off.uploadsBtn);
+
+  SUMMARY.uploadsEnabled = true;
+  const on = await render({ admin: true });
+  ok('uploads open reads "Disable uploads: OFF"',
+     on.uploadsBtn === 'Disable uploads: OFF', on.uploadsBtn);
+
+  SUMMARY.uploadsEnabled = false;   // leave it as the site actually sits
+}
+
+console.log('\ntest mode turns its button red');
+{
+  SUMMARY.uploadsEnabled = false;
+  SUMMARY.testMode = false;
+  delete SUMMARY.elections.test;
+  const off = await render({ admin: true });
+  ok('the test button is not red while test mode is off', off.testBtnDanger === false);
+
+  SUMMARY.testMode = true;
+  SUMMARY.current = 'test';
+  SUMMARY.elections.test = {
+    id: 'test', label: 'TEST MODE Results', archived: false, ephemeral: true,
+    display: ['NDC', 'APC', 'PDP', 'ADC'], totals: {}, counts: {},
+  };
+  const on = await render({ admin: true });
+  ok('the test button is red while test mode is on', on.testBtnDanger === true);
+
+  SUMMARY.testMode = false;
+  SUMMARY.current = 'presidential';
+  delete SUMMARY.elections.test;
 }
 
 console.log(`\n${fails ? 'FAILURES: ' + fails : 'ALL PASSED'}\n`);

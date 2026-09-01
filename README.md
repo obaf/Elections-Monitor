@@ -244,6 +244,17 @@ units with uploads, newest decisions first, each opening to its photos with the
 OCR figures editable before approving. The page follows whichever election the
 server reports as live, so it works in test mode with no switch of its own.
 
+## What shows under a photo after approval
+
+OCR is often wrong, so an admin corrects the figures before approving. Once a
+unit is counted, the figures under its photo are the ones that were **approved**,
+not the ones that were read — captioned as such, with what OCR originally read
+kept underneath for reference when the two differ.
+
+They come from the counter item (`CNT.res`), the same row the totals were built
+from, rather than being copied onto each upload. One source of truth means the
+display cannot drift away from the tally.
+
 ## Archiving the Osun photos
 
 `python tools/archive_osun_photos.py` copies every Osun result sheet into

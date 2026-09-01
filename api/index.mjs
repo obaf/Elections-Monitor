@@ -620,7 +620,20 @@ export const handler = async (event) => {
           device: u.deviceId ? createHash('sha256').update(u.deviceId).digest('hex').slice(0, 6) : '?',
         }));
       const cnt = await get(K.cnt, code);
-      return json(200, { election: K.id, archived: K.archived, uploads, counted: !!cnt?.v });
+      /* `results` is what was actually counted, which is NOT always what OCR
+       * read: an admin corrects misread figures before approving. The page
+       * shows these below the photo once a unit is counted, so what is on
+       * screen is what is in the totals. Taken from the counter item rather
+       * than copied onto the uploads, so the display cannot drift away from
+       * the figures the total was built from. */
+      return json(200, {
+        election: K.id,
+        archived: K.archived,
+        uploads,
+        counted: !!cnt?.v,
+        results: cnt?.res || {},
+        status: cnt?.st || (cnt?.v ? 'added' : 'pending'),
+      });
     }
 
     /* ---- messages to admin ---- */

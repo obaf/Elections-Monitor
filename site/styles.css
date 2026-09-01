@@ -316,9 +316,6 @@ h1 {
   font-weight: 600;
 }
 
-.btn-danger { background: #7d1a15; border-color: #7d1a15; color: #fff; }
-.btn-danger:hover { background: #64140f; }
-
 .btn:disabled,
 .btn[disabled] { opacity: .45; cursor: not-allowed; }
 
@@ -340,6 +337,18 @@ h1 {
 .btn-primary { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn-primary:hover { background: var(--brand-dark); }
 .btn-up { width: 100%; }
+
+/* Declared after .btn and .btn-small on purpose: all three are single-class
+   selectors, so at equal specificity the LAST one wins. Sitting above .btn,
+   this rule was silently overridden and the button never turned red. */
+.btn-danger,
+.btn-small.btn-danger {
+  background: #b3261e;
+  border-color: #8f1e17;
+  color: #fff;
+}
+.btn-danger:hover,
+.btn-small.btn-danger:hover { background: #8f1e17; }
 
 main { max-width: 1180px; margin: 0 auto; padding: 20px 16px 60px; }
 
@@ -515,3 +524,17 @@ textarea, input[type=text], input[type=password] {
 
 .pu-body { padding: 0 14px 14px; }
 .pu-body .card:first-child { margin-top: 0; }
+
+/* The figures under a photo after approval. These are what was COUNTED, which
+   is not always what OCR read -- the caption says which, so a corrected figure
+   is never mistaken for a misreading that went into the totals. */
+.fig-caption {
+  margin: 8px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  text-transform: uppercase;
+  color: var(--brand-dark);
+}
+.fig-was { margin: 6px 0 0; font-size: 12px; font-style: italic; }
+.fig-final { max-width: 320px; }
