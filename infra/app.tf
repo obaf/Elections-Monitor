@@ -235,6 +235,11 @@ data "aws_iam_policy_document" "api" {
       "dynamodb:PutItem",
       "dynamodb:UpdateItem",
       "dynamodb:Query",
+      # Delete and BatchWrite exist only to wipe the test-mode namespace when
+      # test mode is switched off. The keys the Lambda can build for that are
+      # all '#TEST'-prefixed, and it re-checks that before issuing a delete.
+      "dynamodb:DeleteItem",
+      "dynamodb:BatchWriteItem",
     ]
     resources = [aws_dynamodb_table.app.arn]
   }
@@ -244,6 +249,15 @@ data "aws_iam_policy_document" "api" {
     effect    = "Allow"
     actions   = ["s3:GetObject", "s3:PutObject"]
     resources = ["${aws_s3_bucket.photos.arn}/*"]
+  }
+
+  # Deleting is scoped by IAM to the test prefix as well as by the code, so a
+  # bug in the wipe still cannot reach a real election's photos.
+  statement {
+    sid       = "TestPhotoCleanup"
+    effect    = "Allow"
+    actions   = ["s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.photos.arn}/photos/test/*"]
   }
 
   # Textract reads the object itself, so it needs the bucket listed too.

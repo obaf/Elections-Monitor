@@ -20,9 +20,15 @@ const isAdmin = () => !!adminToken;
    default; ?election=osun turns the same page into the Osun archive, so the
    finished election's result sheets stay reachable and viewable through the
    familiar polling-unit list rather than needing a second screen. */
-const VIEW = (new URLSearchParams(location.search).get('election') || '').toLowerCase() === 'osun'
-  ? 'osun' : 'presidential';
-const IS_ARCHIVE = VIEW === 'osun';
+const FORCED = (new URLSearchParams(location.search).get('election') || '').toLowerCase() === 'osun'
+  ? 'osun' : null;
+const IS_ARCHIVE = FORCED === 'osun';
+
+/* Which election the grid is bound to. Not a constant: while test mode is on
+   the server reports the test election as current, and the grid follows it, so
+   a tester sees their own upload appear in the counts without any of it
+   touching the real election's keys. */
+const VIEW = () => FORCED || SUMMARY.current || 'presidential';
 
 /* Stable per-browser id. The "two different phones" rule needs to tell
    devices apart; this is the cheapest honest signal available client-side. */
@@ -88,8 +94,12 @@ function renderTotals() {
   }
   // Osun first: it is the completed contest, and the screenshot the layout was
   // specified from reads top-down from the finished election to the live one.
+  // The test row, when present, goes last -- it is scaffolding, not a result.
   const ids = order.slice().sort((a, b) => {
-    const rank = (x) => (SUMMARY.elections[x].archived ? 0 : 1);
+    const rank = (x) => {
+      const e = SUMMARY.elections[x];
+      return e.ephemeral ? 2 : (e.archived ? 0 : 1);
+    };
     return rank(a) - rank(b);
   });
   el.innerHTML = ids.map((id) => electionRow(SUMMARY.elections[id])).join('');
@@ -97,7 +107,7 @@ function renderTotals() {
 
 /* -------------------------------- grid ---------------------------------- */
 
-const viewCounts = () => SUMMARY.elections?.[VIEW]?.counts || {};
+const viewCounts = () => SUMMARY.elections?.[VIEW()]?.counts || {};
 
 function uploadLabel(code) {
   const [n = 0, counted = 0] = viewCounts()[code] || [];
@@ -252,7 +262,7 @@ async function toggleExtract(code, tr) {
   let data;
   try {
     data = await (await fetch(
-      `${API}/pu?code=${encodeURIComponent(code)}&election=${encodeURIComponent(VIEW)}`)).json();
+      `${API}/pu?code=${encodeURIComponent(code)}&election=${encodeURIComponent(VIEW())}`)).json();
   } catch {
     row.innerHTML = `<td colspan="4">Could not load results. Please try again.</td>`;
     return;
@@ -369,9 +379,16 @@ function refreshRow(code) {
    location hint and the buttons cannot drift out of step with each other. */
 function refreshUploadUi() {
   // An archived election never accepts uploads, whatever the site-wide switch
-  // says -- the contest is finished, not merely paused.
-  const on = !IS_ARCHIVE && !!SUMMARY.uploadsEnabled;
-  $('#uploads-closed').hidden = on || IS_ARCHIVE;
+  // says -- the contest is finished, not merely paused. Test mode opens
+  // uploads on its own, since exercising the flow is the whole point of it.
+  const on = !IS_ARCHIVE && (!!SUMMARY.uploadsEnabled || !!SUMMARY.testMode);
+  $('#test-banner').hidden = !SUMMARY.testMode || IS_ARCHIVE;
+
+  const tt = $('#test-toggle-btn');
+  tt.hidden = !isAdmin() || IS_ARCHIVE;
+  tt.textContent = SUMMARY.testMode ? 'Disable test mode' : 'Enable test mode';
+  tt.classList.toggle('btn-danger', !!SUMMARY.testMode);
+  $('#uploads-closed').hidden = on || IS_ARCHIVE || !!SUMMARY.testMode;
   $('#location-notice').hidden = !on;
   document.querySelectorAll('.btn-up').forEach((b) => {
     b.disabled = !on;
@@ -395,6 +412,58 @@ function refreshAdminUi() {
   $('#admin-msgs-btn').hidden = !isAdmin();
   refreshUploadUi();
 }
+
+/* Test mode, from the front page. Switching it OFF destroys everything done
+   while it was on, so it asks first and names what will go. Switching it ON is
+   harmless and does not ask. */
+$('#test-toggle-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const turningOff = !!SUMMARY.testMode;
+
+  if (turningOff && !confirm(
+    'Switch test mode OFF?\n\nEverything uploaded or approved during test mode ' +
+    'will be permanently erased. Real election results are not affected.')) return;
+
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = turningOff ? 'Erasing test data…' : 'Enabling…';
+  try {
+    const r = await fetch(`${API}/admin/test-mode`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ enabled: !SUMMARY.testMode }),
+    });
+    if (r.status === 401) {
+      adminToken = '';
+      sessionStorage.removeItem('irev2-admin');
+      refreshAdminUi();
+      toast('Your admin session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) {
+      let msg = `Could not change test mode (HTTP ${r.status}).`;
+      try { msg = (await r.json()).error || msg; } catch { /* keep the status message */ }
+      toast(msg, 10000);
+      btn.textContent = original;
+      return;
+    }
+    const j = await r.json();
+    toast(j.testMode
+      ? 'Test mode is ON. Uploads go to an isolated test area and are deleted when it is switched off.'
+      : `Test mode is OFF. Removed ${j.removed?.items ?? 0} test record(s) and ` +
+        `${j.removed?.photos ?? 0} photo(s). Real results are unchanged.`, 12000);
+
+    // The live election has just changed underneath the grid, so redraw it.
+    await loadSummary({ fresh: true });
+    applyFilter();
+  } catch {
+    toast('Could not reach the server. Test mode was not changed.');
+    btn.textContent = original;
+  } finally {
+    btn.disabled = false;
+    refreshUploadUi();
+  }
+});
 
 $('#safe-harbour-btn').addEventListener('click', () => {
   $('#safe-harbour-dlg').showModal();

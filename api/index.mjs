@@ -1,8 +1,8 @@
 import { createHmac, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
-import { ddb, textract, ssm, s3Get, item, plain, av } from './aws.mjs';
+import { ddb, textract, ssm, s3Get, s3List, s3Delete, item, plain, av } from './aws.mjs';
 import {
   presignPut, readGps, inOsun, parseResults, signature, json, PARTIES,
-  ELECTIONS, CURRENT_ELECTION, electionOf, keysFor,
+  ELECTIONS, CURRENT_ELECTION, REAL_ELECTIONS, TEST_ELECTION, electionOf, keysFor,
 } from './util.mjs';
 
 const TABLE = process.env.TABLE;
@@ -93,20 +93,123 @@ async function siteConfig() {
   const rec = await get('AGG', 'CONFIG');
   const val = {
     uploadsEnabled: !!rec?.uploadsEnabled,
+    testMode: !!rec?.testMode,
     election: rec?.election || CURRENT_ELECTION,
   };
   configCache = { at: Date.now(), val };
   return val;
 }
 
-async function setUploadsEnabled(enabled, election) {
+// One writer for the config item, so a change to either switch cannot drop the
+// other by writing a partial item.
+async function patchConfig(patch) {
+  const cur = await siteConfig();
+  const next = { ...cur, ...patch };
   await put({
     pk: 'AGG', sk: 'CONFIG',
-    uploadsEnabled: !!enabled,
-    election: election || CURRENT_ELECTION,
+    uploadsEnabled: !!next.uploadsEnabled,
+    testMode: !!next.testMode,
+    election: next.election || CURRENT_ELECTION,
     updatedAt: new Date().toISOString(),
   });
   configCache = { at: 0, val: null };
+  return next;
+}
+
+/* While test mode is on, the live election IS the test election. Every upload
+ * and every approval is routed here, so nothing a tester does can be written
+ * under a real election's keys even by mistake. */
+const liveElection = (cfg) => (cfg.testMode ? TEST_ELECTION : CURRENT_ELECTION);
+
+/* ----------------------------- test-mode wipe ---------------------------- */
+
+/* Switching test mode off erases everything done while it was on.
+ *
+ * The safety here is structural rather than careful: every key deleted is
+ * built from keysFor('test'), whose partitions all carry '#TEST' and whose
+ * photos all sit under 'photos/test/'. Osun's keys are unprefixed and the
+ * presidential ones carry '#PRESIDENTIAL', so no real key can be produced by
+ * this function at all. The assertion below states that as an invariant rather
+ * than leaving it to be re-derived by the next reader -- if a refactor ever
+ * makes the test namespace collide with a real one, this throws instead of
+ * deleting an election.
+ */
+function assertTestNamespace(K) {
+  const safe = K.id === TEST_ELECTION &&
+    K.ephemeral === true &&
+    K.cnt.includes('#TEST') &&
+    K.upl.includes('#TEST') &&
+    K.audit.includes('#TEST') &&
+    K.totals.includes('#TEST') &&
+    K.parties.includes('#TEST') &&
+    K.photoPrefix === 'photos/test' &&
+    K.pu('X').startsWith('PU#TEST#');
+  if (!safe) {
+    throw new Error(`refusing to wipe: ${K.id} is not the isolated test namespace`);
+  }
+}
+
+// DynamoDB has no "delete this partition", so items are collected and removed
+// in batches of 25, which is the BatchWriteItem limit.
+async function deleteKeys(keys) {
+  for (let i = 0; i < keys.length; i += 25) {
+    const batch = keys.slice(i, i + 25);
+    await ddb('DynamoDB_20120810.BatchWriteItem', {
+      RequestItems: {
+        [TABLE]: batch.map((k) => ({ DeleteRequest: { Key: item({ pk: k.pk, sk: k.sk }) } })),
+      },
+    });
+  }
+  return keys.length;
+}
+
+async function wipeTestData() {
+  const K = keysFor(TEST_ELECTION);
+  assertTestNamespace(K);
+
+  const keys = [];
+
+  // The per-polling-unit upload partitions are the only ones whose names are
+  // not known up front, so the codes are gathered from both places an upload
+  // records one. Using both means a partially written upload still gets swept.
+  const codes = new Set();
+
+  for (const pk of [K.cnt, K.upl, K.audit]) {
+    for (const row of await query(pk)) {
+      keys.push({ pk, sk: row.sk });
+      if (pk === K.cnt) codes.add(row.sk);
+      if (row.puCode) codes.add(row.puCode);
+    }
+  }
+
+  for (const code of codes) {
+    const pk = K.pu(code);
+    for (const row of await query(pk)) keys.push({ pk, sk: row.sk });
+  }
+
+  keys.push({ pk: 'AGG', sk: K.totals });
+  keys.push({ pk: 'AGG', sk: K.parties });
+
+  // Belt and braces: nothing without a test marker leaves this function.
+  const unsafe = keys.filter((k) => !k.pk.includes('TEST') && !k.sk.includes('TEST'));
+  if (unsafe.length) {
+    throw new Error(`refusing to wipe non-test keys: ${JSON.stringify(unsafe.slice(0, 3))}`);
+  }
+
+  const items = await deleteKeys(keys);
+
+  // Test photos live under their own prefix, so the same reasoning applies.
+  let photos = 0;
+  const objects = await s3List(BUCKET, `${K.photoPrefix}/`);
+  for (const key of objects) {
+    if (!key.startsWith(`${K.photoPrefix}/`)) continue;   // never delete outside the prefix
+    await s3Delete(BUCKET, key);
+    photos++;
+  }
+
+  partyCache[K.id] = null;
+  console.log(`test wipe: removed ${items} items and ${photos} photos`);
+  return { items, photos, pollingUnits: codes.size };
 }
 
 async function bumpCount(K, puCode) {
@@ -391,20 +494,30 @@ export const handler = async (event) => {
     } catch { body = {}; }
   }
 
-  // Every data route is scoped to an election. Reads may name one; writes are
-  // always against the live election, so a stale tab cannot post a result into
-  // the closed Osun archive.
-  const K = keysFor(electionOf(qs.election ?? body.election));
-  const LIVE = keysFor(CURRENT_ELECTION);
-
   try {
+    /* Every data route is scoped to an election. A read may name one; anything
+     * unnamed follows whichever election is currently live -- which is the TEST
+     * election while test mode is on. That default is what keeps an admin
+     * approving in test mode from writing into the real presidential totals
+     * without having to remember to pass a parameter. */
+    const CFG = await siteConfig();
+    const K = keysFor(electionOf(qs.election ?? body.election, liveElection(CFG)));
+
+    // Site-wide admin actions are recorded against the real election, not the
+    // ephemeral test one, so the record of them survives a test wipe.
+    const LIVE = keysFor(CURRENT_ELECTION);
+
     /* ---- public ---- */
 
     if (method === 'POST' && path === '/upload-url') {
-      if (!(await siteConfig()).uploadsEnabled) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const cfg = CFG;
+      // Test mode exists to exercise the upload path while no election is
+      // running, so it opens uploads on its own -- into the test namespace.
+      if (!cfg.uploadsEnabled && !cfg.testMode) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const W = keysFor(liveElection(cfg));
       const puCode = String(body.puCode || '').trim();
       if (!/^[0-9-]{6,20}$/.test(puCode)) return json(400, { error: 'bad polling unit' });
-      const key = `${LIVE.photoPrefix}/${puCode}/${randomUUID()}.jpg`;
+      const key = `${W.photoPrefix}/${puCode}/${randomUUID()}.jpg`;
       const url = presignPut({
         bucket: BUCKET, key, region: REGION,
         creds: {
@@ -413,18 +526,23 @@ export const handler = async (event) => {
           sessionToken: process.env.AWS_SESSION_TOKEN,
         },
       });
-      return json(200, { url, key });
+      return json(200, { url, key, election: W.id });
     }
 
     if (method === 'POST' && path === '/upload-done') {
-      if (!(await siteConfig()).uploadsEnabled) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const cfg = CFG;
+      if (!cfg.uploadsEnabled && !cfg.testMode) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const W = keysFor(liveElection(cfg));
       const puCode = String(body.puCode || '').trim();
       const key = String(body.key || '');
       const deviceId = String(body.deviceId || '').slice(0, 64);
-      if (!key.startsWith(`${LIVE.photoPrefix}/${puCode}/`)) return json(400, { error: 'bad key' });
-      const r = await processUpload(LIVE, { puCode, key, deviceId });
+      // The prefix check is what stops a client naming a key in another
+      // election's namespace and having its photo counted there.
+      if (!key.startsWith(`${W.photoPrefix}/${puCode}/`)) return json(400, { error: 'bad key' });
+      const r = await processUpload(W, { puCode, key, deviceId });
       return json(200, {
         ...r,
+        election: W.id,
         message: r.hasGps && r.inOsun ? UPLOAD_ACK : NO_LOCATION_ACK,
       });
     }
@@ -435,18 +553,26 @@ export const handler = async (event) => {
      * The flat `totals`/`counts` keys mirror the live election so an older
      * cached copy of app.js keeps working. */
     if (method === 'GET' && path === '/summary') {
-      const cfg = await siteConfig();
-      const ids = Object.keys(ELECTIONS);
+      const cfg = CFG;
+      // The test election is only ever shown while test mode is on, so an
+      // ordinary visitor never sees a row that is about to be deleted.
+      const ids = cfg.testMode ? [...REAL_ELECTIONS, TEST_ELECTION] : REAL_ELECTIONS;
       const list = await Promise.all(ids.map((id) => electionSummary(keysFor(id))));
       const elections = Object.fromEntries(list.map((e) => [e.id, e]));
-      const live = elections[CURRENT_ELECTION];
+      const current = liveElection(cfg);
+      const live = elections[current];
       return json(200, {
         elections,
-        current: CURRENT_ELECTION,
+        current,
         uploadsEnabled: cfg.uploadsEnabled,
+        testMode: cfg.testMode,
         totals: live.totals,
         counts: live.counts,
-      }, { 'cache-control': 'public, max-age=15' });
+      }, {
+        // While test mode is on the figures change as fast as an admin clicks,
+        // and a stale row reads as "approving did nothing". Not cached.
+        'cache-control': cfg.testMode ? 'no-store' : 'public, max-age=15',
+      });
     }
 
     // Per-polling-unit figures behind the totals, so the headline number can
@@ -540,11 +666,12 @@ export const handler = async (event) => {
        * accountability as "why did that total change". */
       if (path === '/admin/uploads-enabled') {
         if (method === 'GET') {
-          return json(200, { uploadsEnabled: (await siteConfig()).uploadsEnabled });
+          const c = await siteConfig();
+          return json(200, { uploadsEnabled: c.uploadsEnabled, testMode: c.testMode });
         }
         if (method === 'POST') {
           const enabled = !!body.enabled;
-          await setUploadsEnabled(enabled, CURRENT_ELECTION);
+          await patchConfig({ uploadsEnabled: enabled });
           const cfg = await adminConfig();
           await audit(LIVE, enabled ? 'uploads-enabled' : 'uploads-disabled', '', {
             actor: cfg.username,
@@ -553,6 +680,69 @@ export const handler = async (event) => {
           console.log(`uploads ${enabled ? 'ENABLED' : 'DISABLED'} by ${cfg.username}`);
           return json(200, { ok: true, uploadsEnabled: enabled });
         }
+      }
+
+      /* Test mode. Switching it OFF is the destructive half: everything done
+       * while it was on is deleted. The wipe runs before the flag is cleared,
+       * so a failure leaves test mode on with its data intact rather than
+       * stranding orphaned test rows under a flag that says they are gone. */
+      if (path === '/admin/test-mode') {
+        if (method === 'GET') {
+          const c = await siteConfig();
+          const T = await electionSummary(keysFor(TEST_ELECTION));
+          return json(200, { testMode: c.testMode, totals: T.totals, units: Object.keys(T.counts).length });
+        }
+        if (method === 'POST') {
+          const enabled = !!body.enabled;
+          const cfg = await adminConfig();
+          const before = await siteConfig();
+
+          if (!enabled) {
+            const removed = await wipeTestData();
+            await patchConfig({ testMode: false });
+            await audit(LIVE, 'test-mode-off', '', {
+              actor: cfg.username,
+              reason: `wiped ${removed.items} items, ${removed.photos} photos, ` +
+                      `${removed.pollingUnits} polling units`,
+            });
+            console.log(`test mode OFF by ${cfg.username}; ${JSON.stringify(removed)}`);
+            return json(200, { ok: true, testMode: false, removed });
+          }
+
+          await patchConfig({ testMode: true });
+          if (!before.testMode) {
+            await audit(LIVE, 'test-mode-on', '', { actor: cfg.username });
+          }
+          console.log(`test mode ON by ${cfg.username}`);
+          return json(200, { ok: true, testMode: true });
+        }
+      }
+
+      /* "Approve upload": every upload not yet counted, newest first, with the
+       * figures OCR read so the admin can see what they are approving without
+       * opening each polling unit separately. */
+      if (method === 'GET' && path === '/admin/pending') {
+        const items = await query(K.upl, { ScanIndexForward: false, Limit: 200 });
+        const seen = new Set();
+        const rows = [];
+        for (const u of items) {
+          if (!u.uploadId || seen.has(u.uploadId)) continue;
+          seen.add(u.uploadId);
+          const cnt = await get(K.cnt, u.puCode);
+          rows.push({
+            uploadId: u.uploadId, puCode: u.puCode, ts: u.ts,
+            url: K.photoUrl(u.key),
+            extracted: u.extracted || {},
+            inOsun: !!u.inOsun,
+            status: cnt?.v ? 'added' : (cnt?.st || 'pending'),
+          });
+        }
+        return json(200, {
+          election: K.id,
+          archived: K.archived,
+          rows,
+          totals: (await get('AGG', K.totals))?.p || {},
+        });
       }
 
       if (method === 'GET' && path === '/admin/threads') {

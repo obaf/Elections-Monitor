@@ -18,7 +18,7 @@ const creds = () => ({
   sessionToken: process.env.AWS_SESSION_TOKEN,
 });
 
-function signedFetch({ service, host, method = 'POST', path = '/', headers = {}, body = '', raw = false }) {
+function signedFetch({ service, host, method = 'POST', path = '/', query = null, headers = {}, body = '', raw = false }) {
   const c = creds();
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
@@ -40,10 +40,19 @@ function signedFetch({ service, host, method = 'POST', path = '/', headers = {},
     return `${k}:${String(h[key]).trim()}\n`;
   }).join('');
 
+  // SigV4 wants the query sorted by encoded key, and S3 rejects a signature
+  // computed over a different string than the one actually sent -- so the same
+  // value is used for both the signature and the request line.
+  const canonicalQuery = query
+    ? Object.keys(query).sort()
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(query[k])}`)
+      .join('&')
+    : '';
+
   const canonicalRequest = [
     method,
     path,
-    '',
+    canonicalQuery,
     canonicalHeaders,
     signedHeaders.join(';'),
     payloadHash,
@@ -67,7 +76,8 @@ function signedFetch({ service, host, method = 'POST', path = '/', headers = {},
     `SignedHeaders=${signedHeaders.join(';')}, Signature=${signature}`;
 
   return new Promise((resolve, reject) => {
-    const req = request({ host, method, path, headers: h }, (res) => {
+    const url = canonicalQuery ? `${path}?${canonicalQuery}` : path;
+    const req = request({ host, method, path: url, headers: h }, (res) => {
       const chunks = [];
       res.on('data', (d) => chunks.push(d));
       res.on('end', () => {
@@ -96,12 +106,54 @@ export const ddb = target('dynamodb', 'dynamodb', 'application/x-amz-json-1.0');
 export const textract = target('textract', 'textract', 'application/x-amz-json-1.1');
 export const ssm = target('ssm', 'ssm', 'application/x-amz-json-1.1');
 
+const s3Path = (key) => '/' + key.split('/').map(encodeURIComponent).join('/');
+
 export const s3Get = (bucket, key) =>
   signedFetch({
     service: 's3',
     host: `${bucket}.s3.${REGION}.amazonaws.com`,
     method: 'GET',
-    path: '/' + key.split('/').map(encodeURIComponent).join('/'),
+    path: s3Path(key),
+    raw: true,
+  });
+
+/* Listing and deleting exist for exactly one purpose: wiping test-mode photos
+ * when test mode is switched off.
+ *
+ * S3's REST list returns XML, not JSON. Pulling in a parser would break the
+ * zero-dependency rule the whole Lambda is built on, so the keys are read out
+ * with a regex -- adequate for a response whose shape is fixed by the API, and
+ * not something to reuse for arbitrary XML. */
+export async function s3List(bucket, prefix) {
+  const keys = [];
+  let token = null;
+  do {
+    const q = { 'list-type': '2', prefix, 'max-keys': '1000' };
+    if (token) q['continuation-token'] = token;
+    const xml = (await signedFetch({
+      service: 's3',
+      host: `${bucket}.s3.${REGION}.amazonaws.com`,
+      method: 'GET',
+      path: '/',
+      query: q,
+      raw: true,
+    })).toString('utf8');
+
+    for (const m of xml.matchAll(/<Key>([^<]*)<\/Key>/g)) keys.push(m[1].replace(/&amp;/g, '&'));
+
+    const more = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+    const next = xml.match(/<NextContinuationToken>([^<]*)<\/NextContinuationToken>/);
+    token = more && next ? next[1] : null;
+  } while (token);
+  return keys;
+}
+
+export const s3Delete = (bucket, key) =>
+  signedFetch({
+    service: 's3',
+    host: `${bucket}.s3.${REGION}.amazonaws.com`,
+    method: 'DELETE',
+    path: s3Path(key),
     raw: true,
   });
 

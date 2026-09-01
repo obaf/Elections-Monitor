@@ -24,12 +24,18 @@
 
   <section id="panel" hidden>
     <div class="row">
-      <button id="tab-uploads" class="btn btn-primary">Uploads</button>
+      <button id="tab-uploads" class="btn btn-primary">Approve upload</button>
       <button id="tab-msgs" class="btn">Messages to admin</button>
-      <button id="uploads-toggle" class="btn">Enable/Disable uploads</button>
       <button id="out" class="btn">Log out</button>
     </div>
+
+    <div class="row">
+      <button id="uploads-toggle" class="btn">Enable/Disable uploads</button>
+      <button id="test-toggle" class="btn">Enable test mode</button>
+    </div>
     <p id="uploads-state" class="muted"></p>
+    <p id="test-state" class="muted"></p>
+    <div id="test-banner" class="notice notice-test" role="status" hidden></div>
     <div id="uploads"></div>
     <div id="msgs" hidden></div>
   </section>
@@ -57,22 +63,90 @@ function show() {
    rather than remembered here, so two admins on two machines cannot disagree
    about whether the portal is open. */
 let uploadsEnabled = false;
+let testMode = false;
 
 function paintUploadState() {
   $('#uploads-state').innerHTML = uploadsEnabled
     ? 'Uploads are <strong>OPEN</strong> — the public can send in result photos.'
     : 'Uploads are <strong>CLOSED</strong> — the public can view results but cannot upload.';
   $('#uploads-toggle').textContent = uploadsEnabled ? 'Disable uploads' : 'Enable uploads';
+
+  $('#test-toggle').textContent = testMode ? 'Disable test mode' : 'Enable test mode';
+  $('#test-toggle').classList.toggle('btn-danger', testMode);
+  $('#test-state').innerHTML = testMode
+    ? 'Test mode is <strong>ON</strong> — uploads are open to anyone and everything ' +
+      'they do is kept separate from the real results.'
+    : 'Test mode is <strong>OFF</strong>.';
+  const b = $('#test-banner');
+  b.hidden = !testMode;
+  if (testMode) {
+    b.innerHTML = 'TEST MODE IS ON. Uploads and approvals are going into an isolated ' +
+      'test area, not the real election. <strong>Everything done here is permanently ' +
+      'deleted when you switch test mode off.</strong>';
+  }
 }
 
 async function loadUploadState() {
   try {
     const r = await api('/admin/uploads-enabled');
     if (!r.ok) return;
-    uploadsEnabled = !!(await r.json()).uploadsEnabled;
+    const j = await r.json();
+    uploadsEnabled = !!j.uploadsEnabled;
+    testMode = !!j.testMode;
     paintUploadState();
   } catch { /* leave the last known state on screen */ }
 }
+
+/* Switching test mode OFF destroys data, so it asks first and says exactly what
+   will go. Switching it ON is harmless and does not. */
+$('#test-toggle').addEventListener('click', async () => {
+  const btn = $('#test-toggle');
+  const turningOff = testMode;
+
+  if (turningOff) {
+    let detail = '';
+    try {
+      const r = await api('/admin/test-mode');
+      if (r.ok) {
+        const j = await r.json();
+        const figs = Object.entries(j.totals || {}).map(([p, v]) => `${p} ${v}`).join(', ');
+        detail = `\n\nThis will delete ${j.units || 0} test polling unit(s)` +
+                 (figs ? ` and their figures (${figs})` : '') + '.';
+      }
+    } catch { /* fall through to the generic warning */ }
+    if (!confirm('Switch test mode OFF?' + detail +
+        '\n\nEverything uploaded or approved during test mode will be permanently ' +
+        'erased. Real election results are not affected.')) return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = turningOff ? 'Erasing test data…' : 'Enabling…';
+  try {
+    const r = await api('/admin/test-mode', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !testMode }),
+    });
+    if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
+    if (!r.ok) {
+      let msg = `Could not change test mode (HTTP ${r.status}).`;
+      try { msg = (await r.json()).error || msg; } catch { /* keep the status message */ }
+      $('#test-state').textContent = msg;
+      return;
+    }
+    const j = await r.json();
+    testMode = !!j.testMode;
+    paintUploadState();
+    if (j.removed) {
+      $('#test-state').innerHTML += ` Removed ${j.removed.items} record(s) and ` +
+        `${j.removed.photos} photo(s).`;
+    }
+    loadUploads();
+  } catch {
+    $('#test-state').textContent = 'Could not reach the server. Test mode was not changed.';
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $('#uploads-toggle').addEventListener('click', async () => {
   const btn = $('#uploads-toggle');
@@ -113,23 +187,102 @@ $('#out').addEventListener('click', () => { token = ''; sessionStorage.removeIte
 $('#tab-uploads').addEventListener('click', () => { $('#uploads').hidden = false; $('#msgs').hidden = true; loadUploads(); });
 $('#tab-msgs').addEventListener('click', () => { $('#uploads').hidden = true; $('#msgs').hidden = false; loadMsgs(); });
 
+/* "Approve upload": every upload the portal has taken, newest first, with what
+   OCR read and a control to put it into the totals. The figures are editable
+   here for the same reason they are on the front page -- OCR misreads, and
+   approving a number nobody checked is how a wrong total becomes official. */
+let TOTALS = {};
+
+function figuresTable(u) {
+  const rows = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
+  const body = rows.length
+    ? rows.map(([p, v]) => editRow(p, v)).join('')
+    : editRow('', '');
+  return `<table class="edit-tbl" data-edit="${esc(u.uploadId)}">
+    <thead><tr><th>Party</th><th>Votes</th><th></th></tr></thead>
+    <tbody>${body}</tbody></table>`;
+}
+
+const editRow = (party, votes) => `<tr>
+  <td><input class="p-in" type="text" value="${esc(party)}" maxlength="12"
+             placeholder="PARTY" autocapitalize="characters"></td>
+  <td><input class="v-in" type="number" min="0" step="1" value="${esc(votes)}" placeholder="0"></td>
+  <td><button class="row-x" data-delrow title="remove this party">&times;</button></td>
+</tr>`;
+
+function totalsLine() {
+  const e = Object.entries(TOTALS).sort((a, b) => b[1] - a[1]);
+  return e.length
+    ? e.map(([p, v]) => `${esc(p)} <strong>${nf.format(v)}</strong>`).join(' · ')
+    : '<span class="muted">nothing counted yet</span>';
+}
+
+function statusPill(st) {
+  if (st === 'added') return '<span class="pill pill-added">Added to totals</span>';
+  if (st === 'revoked') return '<span class="pill pill-revoked">Revoked</span>';
+  return '<span class="pill pill-none">Not added yet</span>';
+}
+
 async function loadUploads() {
   $('#uploads').innerHTML = '<p class="muted">Loading…</p>';
-  const r = await api('/admin/recent');
+  const r = await api('/admin/pending');
   if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
-  const { uploads } = await r.json();
-  $('#uploads').innerHTML = uploads.length ? uploads.map((u) => {
-    const rows = Object.entries(u.extracted || {}).sort((a, b) => b[1] - a[1]);
-    return `<div class="card" style="border:1px solid var(--line);border-radius:8px;padding:12px;margin:12px 0;background:#fff">
+  if (!r.ok) { $('#uploads').innerHTML = '<p class="login-err">Could not load uploads.</p>'; return; }
+
+  const { rows, totals, election, archived } = await r.json();
+  TOTALS = totals || {};
+
+  const head = `<p class="muted">Showing <strong>${esc(election)}</strong> uploads.
+     Running total: <span id="totals-line">${totalsLine()}</span></p>`;
+
+  if (archived) {
+    $('#uploads').innerHTML = head +
+      '<p class="login-err">This election is archived and can no longer be changed.</p>';
+    return;
+  }
+
+  $('#uploads').innerHTML = head + (rows.length ? rows.map((u) => `
+    <div class="card" data-card="${esc(u.uploadId)}">
       <div><strong>${esc(u.puCode)}</strong> · ${new Date(u.ts).toLocaleString()} ·
-        ${u.inOsun ? '<span class="badge badge-ok">in Osun</span>' : '<span class="badge badge-no">no Osun location</span>'}</div>
-      <img src="${esc(u.url)}" alt="" style="max-width:220px;display:block;margin:8px 0;border-radius:6px">
-      <div>${rows.length ? rows.map(([p, v]) => `${esc(p)}: <strong>${nf.format(v)}</strong>`).join(' · ') : '<span class="muted">nothing extracted</span>'}</div>
-      <div class="row">
-        <button class="btn btn-primary" data-approve="${esc(u.uploadId)}" data-pu="${esc(u.puCode)}">Approve into totals</button>
-      </div>
-    </div>`;
-  }).join('') : '<p class="muted">No uploads yet.</p>';
+        ${u.inOsun ? '<span class="badge badge-ok">in Osun</span>'
+                   : '<span class="badge badge-no">no Osun location</span>'}
+        ${statusPill(u.status)}</div>
+      <img src="${esc(u.url)}" alt="" loading="lazy"
+           style="max-width:220px;display:block;margin:8px 0;border-radius:6px">
+      ${u.status === 'added' ? '' : figuresTable(u)}
+      <p class="edit-err" data-err="${esc(u.uploadId)}" hidden></p>
+      ${u.status === 'added' ? '' : `<div class="row">
+        <button class="btn" data-addrow="${esc(u.uploadId)}">+ add a party</button>
+        <button class="btn btn-primary" data-approve="${esc(u.uploadId)}"
+                data-pu="${esc(u.puCode)}">Approve into totals</button>
+      </div>`}
+    </div>`).join('') : '<p class="muted">No uploads yet.</p>');
+}
+
+// Same validation as the front page: a silently dropped row would look as if
+// it had been counted.
+function collectFigures(uploadId) {
+  const tbl = document.querySelector(`[data-edit="${CSS.escape(uploadId)}"]`);
+  if (!tbl) return { error: 'Could not read the figures table.' };
+  const figures = {};
+  for (const tr of [...tbl.tBodies[0].rows]) {
+    const pIn = tr.querySelector('.p-in');
+    const vIn = tr.querySelector('.v-in');
+    if (!pIn || !vIn) continue;
+    const party = pIn.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const raw = vIn.value.trim().replace(/[,\s]/g, '');
+    if (!party && raw === '') continue;
+    if (!party) return { error: 'Every row needs a party name.' };
+    if (raw === '') return { error: `Enter a score for ${party} — digits only.` };
+    const votes = Number(raw);
+    if (!Number.isInteger(votes) || votes < 0) {
+      return { error: `“${raw}” is not a valid score for ${party}.` };
+    }
+    if (figures[party] !== undefined) return { error: `${party} appears twice.` };
+    figures[party] = votes;
+  }
+  if (!Object.keys(figures).length) return { error: 'Enter at least one party and score.' };
+  return { figures };
 }
 
 async function loadMsgs() {
@@ -149,11 +302,58 @@ async function loadMsgs() {
 }
 
 document.addEventListener('click', async (e) => {
+  const addrow = e.target.closest('[data-addrow]');
+  if (addrow) {
+    const tbl = document.querySelector(`[data-edit="${CSS.escape(addrow.dataset.addrow)}"]`);
+    tbl?.tBodies[0].insertAdjacentHTML('beforeend', editRow('', ''));
+    return;
+  }
+  const delrow = e.target.closest('[data-delrow]');
+  if (delrow) {
+    const tr = delrow.closest('tr');
+    const tb = tr.parentElement;
+    tr.remove();
+    if (!tb.children.length) tb.insertAdjacentHTML('beforeend', editRow('', ''));
+    return;
+  }
+
   const ap = e.target.closest('[data-approve]');
   if (ap) {
+    const id = ap.dataset.approve;
+    const err = document.querySelector(`[data-err="${CSS.escape(id)}"]`);
+    const fail = (msg) => { if (err) { err.textContent = msg; err.hidden = false; } };
+
+    /* The figures are read from the table and sent explicitly. The previous
+       version posted only the ids and threw the response away, so a refusal --
+       already counted, nothing readable, an expired session -- looked exactly
+       like success: the list simply reloaded unchanged. */
+    const { figures, error } = collectFigures(id);
+    if (error) { fail(error); return; }
+    if (err) err.hidden = true;
+
+    const original = ap.textContent;
     ap.disabled = true; ap.textContent = 'Approving…';
-    await api('/admin/approve', { method: 'POST', body: JSON.stringify({ puCode: ap.dataset.pu, uploadId: ap.dataset.approve }) });
-    loadUploads();
+    try {
+      const r = await api('/admin/approve', {
+        method: 'POST',
+        body: JSON.stringify({ puCode: ap.dataset.pu, uploadId: id, figures }),
+      });
+      if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
+      let payload = {};
+      try { payload = await r.json(); } catch { payload = {}; }
+      if (!r.ok) {
+        fail(payload.error || `Approve failed (HTTP ${r.status}).`);
+        ap.disabled = false; ap.textContent = original;
+        return;
+      }
+      TOTALS = payload.totals || TOTALS;
+      const line = document.querySelector('#totals-line');
+      if (line) line.innerHTML = totalsLine();
+      await loadUploads();
+    } catch {
+      fail('Could not reach the server. Nothing was changed.');
+      ap.disabled = false; ap.textContent = original;
+    }
     return;
   }
   const send = e.target.closest('[data-send]');

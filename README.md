@@ -196,6 +196,41 @@ posted as a comment and apply nothing.
   `token.actions.githubusercontent.com` already exists in the account (AWS
   permits only one provider per URL).
 
+## Test mode
+
+Test mode is a **third election**, not a flag on the other two. While it is on,
+every upload, count, total, party and audit entry lands under keys carrying
+`#TEST` and every photo under `photos/test/`, and `/summary` reports `test` as
+the current election so the front page grid follows it.
+
+Isolation is therefore structural: there is no code path on which a test figure
+can reach a real total, because the keys a real total lives under are never
+written while test mode is on.
+
+Switching test mode off deletes exactly those partitions and that prefix.
+Three independent things stand in front of that delete:
+
+1. `assertTestNamespace()` refuses to run unless the namespace is the test one,
+   checked by shape rather than by name.
+2. Every key is re-checked for a `TEST` marker immediately before the batch
+   delete.
+3. IAM grants the Lambda `s3:DeleteObject` on `photos/test/*` only, so a bug in
+   the code still cannot reach a real election's photos.
+
+`tools/test_test_mode.mjs` covers the boundary: that the namespaces cannot
+collide, and that the guard rejects a real namespace and an impostor.
+
+Test mode also opens uploads on its own — exercising the upload path while no
+election is running is the entire point of it.
+
+## Approving uploads
+
+The admin console's **Approve upload** button lists every upload the portal has
+taken, newest first, with the figures OCR read. The figures are editable before
+approving, and the running total updates in place. It reads `/admin/pending`,
+which follows whichever election is live — so during test mode it lists test
+uploads and approves into test totals.
+
 ## Archiving the Osun photos
 
 `python tools/archive_osun_photos.py` copies every Osun result sheet into

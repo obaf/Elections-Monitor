@@ -384,7 +384,10 @@ th { background: #eef1f5; font-size: 13px; letter-spacing: .3px; }
 .link-extract { background: none; border: 0; padding: 0; font: inherit; color: var(--brand); text-decoration: underline; cursor: pointer; }
 
 .detail td { background: #fbfcfd; }
-.detail .card { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; background: #fff; }
+/* The admin console renders the same card outside .detail, so the base rule
+   lives here and .detail keeps only what differs. */
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 12px 0; background: #fff; }
+.detail .card { padding: 10px; margin: 0 0 10px; }
 .detail img { max-width: 220px; border-radius: 6px; border: 1px solid var(--line); display: block; margin-bottom: 8px; pointer-events: none; }
 .detail table { border: 0; }
 .detail td, .detail th { border-bottom: 1px dotted var(--line); padding: 4px 8px; }
@@ -449,3 +452,18 @@ textarea, input[type=text], input[type=password] {
   color: #1d3f66;
   font-weight: 600;
 }
+
+/* Test mode is loud on purpose: an admin looking at figures needs to know at a
+   glance whether they are real or about to be deleted. */
+.notice-test {
+  background: #fff8e6;
+  border: 1px solid #e8cf8a;
+  color: #6b4e00;
+  font-weight: 600;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 10px 0;
+}
+
+.totals-row[data-election="test"] .totals-label { color: #8a6100; }
+.totals-row[data-election="test"] .tile { border-color: #e8cf8a; background: #fffdf6; }

@@ -309,7 +309,30 @@ export const ELECTIONS = {
     archived: false,
     display: ['NDC', 'APC', 'PDP'],
   },
+
+  /* Test mode is a THIRD election, not a flag on the other two.
+   *
+   * Every test upload, count, total, party and audit entry lands under keys
+   * carrying '#TEST', and every test photo under 'photos/test/'. Isolation is
+   * therefore structural: there is no code path on which a test figure can
+   * reach a real total, because the keys a real total is stored under are
+   * never written during test mode. Switching test mode off deletes exactly
+   * those partitions and that prefix, which is why the wipe can be exhaustive
+   * without ever being able to touch a real result. */
+  test: {
+    id: 'test',
+    label: 'TEST MODE Results',
+    archived: false,
+    ephemeral: true,
+    display: ['NDC', 'APC', 'PDP'],
+  },
 };
+
+// Elections a visitor can be shown by default. Test is deliberately excluded:
+// it appears only while an admin has test mode switched on.
+export const REAL_ELECTIONS = ['osun', 'presidential'];
+
+export const TEST_ELECTION = 'test';
 
 export const isElection = (id) => Object.prototype.hasOwnProperty.call(ELECTIONS, id);
 
@@ -329,6 +352,7 @@ export function keysFor(id) {
     id: e.id,
     label: e.label,
     archived: e.archived,
+    ephemeral: !!e.ephemeral,
     display: e.display,
     totals: legacy ? 'TOTALS' : `TOTALS#${SUF}`,
     parties: legacy ? 'PARTIES' : `PARTIES#${SUF}`,
