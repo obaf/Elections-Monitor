@@ -25,13 +25,13 @@ const SUMMARY = {
   uploadsEnabled: false,
   elections: {
     osun: {
-      id: 'osun', label: 'Osun Election Results', archived: true,
+      id: 'osun', label: 'Osun Election Results', archived: true, ephemeral: false,
       display: ['ACCORD', 'APC', 'ADC'],
       totals: { ACCORD: 3491, APC: 2046, ADC: 179 },
       counts: { '29-01-01-001': [2, 1, 'added'] },
     },
     presidential: {
-      id: 'presidential', label: 'Presidential Election Results', archived: false,
+      id: 'presidential', label: 'Presidential Election Results', archived: false, ephemeral: false,
       display: ['NDC', 'APC', 'PDP', 'ADC'],
       totals: {},
       counts: {},
@@ -149,6 +149,40 @@ ok('the archive grid drops the upload button entirely',
    'a finished election must not offer an upload control');
 ok('the archive grid still lists polling units', arch.rows.includes('TOWN HALL IWARA'));
 ok('and still offers the extracted result', arch.rows.includes('view extracted result'));
+
+console.log('\nTEST MODE view (the server reports test as current)');
+{
+  // Exactly the payload /api/summary returns while test mode is on.
+  SUMMARY.current = 'test';
+  SUMMARY.testMode = true;
+  SUMMARY.elections.test = {
+    id: 'test', label: 'TEST MODE Results', archived: false, ephemeral: true,
+    display: ['NDC', 'APC', 'PDP', 'ADC'],
+    totals: {}, counts: {},
+  };
+  const t = await render();
+
+  ok('three rows are drawn', (t.totals.match(/totals-row/g) || []).length === 3,
+     `found ${(t.totals.match(/totals-row/g) || []).length}`);
+
+  const iOsun = t.totals.indexOf('Osun Election Results');
+  const iTest = t.totals.indexOf('TEST MODE Results');
+  const iPres = t.totals.indexOf('Presidential Election Results');
+
+  /* The specified layout is Osun, then the test row, then the live election.
+     This was previously right by accident: the server did not send `ephemeral`,
+     so the sort fell through and the order came from the payload instead. */
+  ok('Osun is first', iOsun >= 0 && iOsun < iTest);
+  ok('the test row sits above the presidential row', iTest >= 0 && iTest < iPres);
+
+  const testRow = t.totals.slice(iTest, iPres);
+  for (const party of ['NDC', 'APC', 'PDP', 'ADC']) {
+    ok(`the test row lists ${party}`, testRow.includes(`>${party}<`));
+  }
+  ok('the test figures read 000', (testRow.match(/>000</g) || []).length === 4,
+     `found ${(testRow.match(/>000</g) || []).length} of 4`);
+  ok('the Osun figures are untouched by test mode', t.totals.includes('3,491'));
+}
 
 console.log(`\n${fails ? 'FAILURES: ' + fails : 'ALL PASSED'}\n`);
 process.exit(fails ? 1 : 0);

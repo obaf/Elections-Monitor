@@ -475,6 +475,9 @@ async function electionSummary(K) {
     id: K.id,
     label: K.label,
     archived: K.archived,
+    // The page orders the rows by these two flags, so both have to travel with
+    // the row. Omitting `ephemeral` left the test row ordered by accident.
+    ephemeral: K.ephemeral,
     display: K.display,
     totals: totals?.p || {},
     counts: c,

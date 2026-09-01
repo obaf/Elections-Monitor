@@ -92,16 +92,18 @@ function renderTotals() {
                    'from two different phones are uploaded for a polling unit.</p>';
     return;
   }
-  // Osun first: it is the completed contest, and the screenshot the layout was
-  // specified from reads top-down from the finished election to the live one.
-  // The test row, when present, goes last -- it is scaffolding, not a result.
-  const ids = order.slice().sort((a, b) => {
-    const rank = (x) => {
-      const e = SUMMARY.elections[x];
-      return e.ephemeral ? 2 : (e.archived ? 0 : 1);
-    };
-    return rank(a) - rank(b);
-  });
+  /* Fixed order: the finished contest, then the test row if one is showing,
+     then the live election. This is the order the specified layout is drawn in,
+     and it is stated explicitly rather than left to the order the server
+     happens to serialise the elections in. */
+  const RANK = { archived: 0, ephemeral: 1, live: 2 };
+  const rankOf = (id) => {
+    const e = SUMMARY.elections[id];
+    if (e.archived) return RANK.archived;
+    if (e.ephemeral) return RANK.ephemeral;
+    return RANK.live;
+  };
+  const ids = order.slice().sort((a, b) => rankOf(a) - rankOf(b));
   el.innerHTML = ids.map((id) => electionRow(SUMMARY.elections[id])).join('');
 }
 
