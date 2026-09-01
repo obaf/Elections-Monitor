@@ -16,10 +16,15 @@ const puScript = readFileSync('site/pu-data.js', 'utf8');
    prefix rather than stored on every row. */
 const INDEX = {
   v: 2,
-  states: [['OSUN', '29']],
-  lgas: [['01 - ATAKUMOSA EAST', 0]],
-  wards: [['01 - IWARA', 0, '29-01-01']],
-  counts: { '29': 2 },
+  states: [['OSUN', '29'], ['ABIA', '01']],
+  lgas: [['01 - ATAKUMOSA EAST', 0], ['01 - ABA NORTH', 1]],
+  wards: [['01 - IWARA', 0, '29-01-01'], ['01 - EZIAMA', 1, '01-01-01']],
+  // The units the front page opens on, carried inside the index itself.
+  featured: [
+    ['005', 'ABIA POLY - ABIA POLY I', 1],
+    ['006', 'ABIA POLY - ABIA POLY II', 1],
+  ],
+  counts: { '29': 2, '01': 2 },
 };
 const STATE_29 = {
   state: '29',
@@ -95,6 +100,7 @@ function makeEl() {
 
 async function render({ search = '', admin = false, openPu = null, query = null } = {}) {
   const els = new Map();
+  const fetched = [];
   const dangerOn = new Set();
   const el = (id) => {
     if (!els.has(id)) {
@@ -134,7 +140,7 @@ async function render({ search = '', admin = false, openPu = null, query = null 
     crypto: { randomUUID: () => 'uuid-1' },
     CSS: { escape: (s) => s },
     IntersectionObserver: class { observe() {} },
-    fetch: async (url) => ({
+    fetch: async (url) => (fetched.push(String(url)), {
       ok: true, status: 200,
       text: async () => JSON.stringify(PU_RESPONSE),
       json: async () => {
@@ -184,6 +190,7 @@ async function render({ search = '', admin = false, openPu = null, query = null 
 
   return {
     detail,
+    fetched,
     countLine: els.get('count-line')?.textContent ?? '',
     uploadsBtn: els.get('uploads-toggle-btn')?.textContent ?? '',
     testBtnDanger: dangerOn.has('test-toggle-btn'),
@@ -237,8 +244,22 @@ ok('no Osun figure leaked into the presidential row',
    !presRow.includes('3,491') && !presRow.includes('2,046'));
 
 console.log('\n  the grid is search-driven, not a list of the whole country');
-ok('with an empty search it prompts rather than listing 176k units',
-   live.rows === '' && /Enter your full PU code/.test(live.countLine), live.countLine);
+/* The page opens on a few real units instead of an empty table, and they ride
+   inside the index it has already fetched -- so this must cost NO extra
+   request. That is the whole point of putting them there. */
+ok('it opens on the featured units, not an empty table',
+   live.rows.includes('ABIA POLY - ABIA POLY I'), live.rows.slice(0, 200));
+ok('both featured units are shown',
+   live.rows.includes('01-01-01-005') && live.rows.includes('01-01-01-006'),
+   live.rows.slice(0, 300));
+ok('no state file was fetched to show them',
+   !live.fetched.some((u) => /\/pu\/\d+\.json/.test(u)), live.fetched.join(', '));
+ok('only the index was fetched',
+   live.fetched.filter((u) => u.includes('polling-units')).length === 1, live.fetched.join(', '));
+ok('it still says how many units exist and how to find yours',
+   /176/.test(live.countLine) === false || /enter your full PU code/i.test(live.countLine),
+   live.countLine);
+ok('and marks them as examples', /example/i.test(live.countLine), live.countLine);
 
 const searched = await render({ query: '29-01-01' });
 ok('searching a PU code renders the matching units',

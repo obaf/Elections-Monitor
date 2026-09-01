@@ -104,15 +104,28 @@
     };
   }
 
+  /* The handful of units the front page opens on. They travel inside the index,
+     which every visit already fetches, so showing them costs no request at all
+     -- as against pulling a 100-600 KB state file to display five rows. */
+  function featured() {
+    if (!index || !index.featured) return [];
+    return index.featured.map(describe);
+  }
+
   /* A single unit by its full code. Returns null when the state is not loaded
      yet -- callers that need it resolved should ensureFor() first, which is
-     cheaper than this discovering it one code at a time. */
+     cheaper than this discovering it one code at a time.
+     The featured units resolve without any state being loaded, so the rows the
+     page opens on stay clickable before anything else is fetched. */
   function unit(code) {
     if (!index) return null;
+    const want = String(code).trim();
+    for (const u of index.featured || []) {
+      if (codeOfUnit(u) === want) return describe(u);
+    }
     const s = stateOf(code);
     const pus = s && stateData.get(s);
     if (!pus) return null;
-    const want = String(code).trim();
     for (const u of pus) {
       if (codeOfUnit(u) === want) return describe(u);
     }
@@ -181,7 +194,7 @@
   }
 
   global.PU = {
-    loadIndex, loadState, ensureFor, search, unit, nameOf, loadedUnits, stateOf,
+    loadIndex, loadState, ensureFor, search, unit, nameOf, loadedUnits, stateOf, featured,
     get index() { return index; },
     get total() {
       return index ? Object.values(index.counts).reduce((a, b) => a + b, 0) : 0;

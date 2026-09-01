@@ -119,6 +119,13 @@ file to fetch. A typical visit downloads the index plus one state, about
 **119 KB**, which keeps the front page inside the cost shape the whole design
 rests on.
 
+**The front page opens on five real polling units** (`01-01-01-005` to `-009`,
+listed as `FEATURED` in the build script). They are carried inside the index,
+in the same shape a state file uses, so showing them costs **no extra request
+and 197 bytes** — as against pulling a 100–600 KB state file to display five
+rows. The build refuses to run if a featured code is not in the dataset, so the
+page cannot advertise a unit that does not exist.
+
 The PU code is not stored per unit either: it is rebuilt in the browser from
 the ward's prefix plus the unit's serial, which would otherwise add ~2 MB of
 information already implied by the ward.

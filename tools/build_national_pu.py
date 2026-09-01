@@ -33,6 +33,19 @@ PU_DIR = os.path.join(ROOT, "site", "pu")
 
 COLUMNS = ["S/N", "INEC PU Code", "State", "LGA", "Ward", "PU Serial (in Ward)", "Polling Unit Name"]
 
+# A handful of polling units the front page shows before anyone searches, so it
+# opens on something real rather than an empty table. They ride along in the
+# index, which every visit already fetches, so showing them costs no request
+# and a few hundred bytes -- as against pulling a whole state file to display
+# five rows.
+FEATURED = [
+    "01-01-01-005",
+    "01-01-01-006",
+    "01-01-01-007",
+    "01-01-01-008",
+    "01-01-01-009",
+]
+
 
 def clean(s):
     """Collapse the runs of whitespace the source is full of."""
@@ -181,15 +194,32 @@ def write_site_json(rows):
         if n > biggest[1]:
             biggest = (f"{states[si][0]} ({code})", n)
 
-    index = {"v": 2, "states": states, "lgas": lgas, "wards": wards, "counts": {
-        states[si][1]: len(u) for si, u in by_state.items()
-    }}
+    # The featured units are stored in exactly the shape a state file uses, so
+    # the browser describes them with the same code path and no special case.
+    want = set(FEATURED)
+    featured = []
+    for si, units in by_state.items():
+        for u in units:
+            if f"{wards[u[2]][2]}-{u[0]}" in want:
+                featured.append(u)
+    found = {f"{wards[u[2]][2]}-{u[0]}" for u in featured}
+    missing = want - found
+    if missing:
+        raise SystemExit(
+            f"REFUSING TO BUILD: featured polling units not in the dataset: "
+            f"{sorted(missing)}. The front page would advertise units that do not exist."
+        )
+    featured.sort(key=lambda u: f"{wards[u[2]][2]}-{u[0]}")
+
+    index = {"v": 2, "states": states, "lgas": lgas, "wards": wards, "featured": featured,
+             "counts": {states[si][1]: len(u) for si, u in by_state.items()}}
     with io.open(OUT_JSON, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False, separators=(",", ":"))
 
     size = os.path.getsize(OUT_JSON)
     print(f"  {OUT_JSON}  {size:,} bytes  "
-          f"({len(states)} states, {len(lgas)} LGAs, {len(wards)} wards) -- always loaded")
+          f"({len(states)} states, {len(lgas)} LGAs, {len(wards)} wards, "
+          f"{len(featured)} featured) -- always loaded")
     print(f"  {PU_DIR}{os.sep}<state>.json  {len(by_state)} files, {total:,} bytes total, "
           f"largest {biggest[0]} at {biggest[1]:,}")
     return size

@@ -173,8 +173,16 @@ async function applyFilter() {
   };
 
   if (!qp && !qw) {
-    show(`${nf.format(PU.total)} polling units across ${PU.states.length} states. ` +
-         'Enter your full PU code above to find yours.');
+    /* Open on a few real polling units rather than an empty table. They come
+       out of the index the page has already fetched, so this costs nothing --
+       no extra request, and no state file pulled to show five rows. */
+    filtered = PU.featured();
+    rendered = 0;
+    $('#rows').innerHTML = '';
+    $('#count-line').textContent =
+      `${nf.format(PU.total)} polling units across ${PU.states.length} states. ` +
+      `Showing ${filtered.length} as an example — enter your full PU code above to find yours.`;
+    renderMore();
     return;
   }
 
