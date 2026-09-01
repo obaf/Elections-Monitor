@@ -79,7 +79,6 @@ function paintUploadState() {
      said "Enable uploads" left the current state to be inferred from which
      word was showing, which is exactly backwards when the state matters. */
   $('#uploads-toggle').textContent = `Disable uploads: ${uploadsEnabled ? 'OFF' : 'ON'}`;
-  $('#uploads-toggle').classList.toggle('btn-danger', !uploadsEnabled);
 
   $('#test-toggle').textContent = testMode ? 'Disable test mode' : 'Enable test mode';
   $('#test-toggle').classList.toggle('btn-danger', testMode);

@@ -325,6 +325,23 @@ console.log('\nthe uploads button names its switch and its state');
   ok('uploads open reads "Disable uploads: OFF"',
      on.uploadsBtn === 'Disable uploads: OFF', on.uploadsBtn);
 
+  /* Test mode permits uploads WITHOUT touching the uploads switch. Reading the
+     effective "can anyone upload right now" state here made the button claim
+     uploads were open while the switch was still closed. */
+  SUMMARY.uploadsEnabled = false;
+  SUMMARY.testMode = true;
+  SUMMARY.current = 'test';
+  SUMMARY.elections.test = {
+    id: 'test', label: 'TEST MODE Results', archived: false, ephemeral: true,
+    display: ['NDC', 'APC', 'PDP', 'ADC'], totals: {}, counts: {},
+  };
+  const inTest = await render({ admin: true });
+  ok('test mode does not flip the label: still "Disable uploads: ON"',
+     inTest.uploadsBtn === 'Disable uploads: ON', inTest.uploadsBtn);
+
+  SUMMARY.testMode = false;
+  SUMMARY.current = 'presidential';
+  delete SUMMARY.elections.test;
   SUMMARY.uploadsEnabled = false;   // leave it as the site actually sits
 }
 

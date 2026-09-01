@@ -432,10 +432,11 @@ function refreshUploadUi() {
 
   const t = $('#uploads-toggle-btn');
   t.hidden = !isAdmin() || IS_ARCHIVE;
-  // Names the switch and its state: "Disable uploads: ON" means uploads are
-  // currently blocked.
-  t.textContent = `Disable uploads: ${on ? 'OFF' : 'ON'}`;
-  t.classList.toggle('btn-danger', !on);
+  /* The label reports the UPLOADS SWITCH, not whether uploading happens to be
+     possible. Test mode permits uploads without touching that switch, so
+     reading the effective state here made the button claim uploads were open
+     while the switch was still closed. */
+  t.textContent = `Disable uploads: ${SUMMARY.uploadsEnabled ? 'OFF' : 'ON'}`;
 }
 
 function refreshAdminUi() {
