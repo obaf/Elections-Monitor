@@ -310,21 +310,41 @@ async function handleFile(e) {
 
   toast('Uploading photo…', 60000);
   try {
-    const { url, key } = await (await fetch(`${API}/upload-url`, {
+    /* The response was previously read straight into { url, key } without
+       checking the status, so a refusal -- uploads closed, bad polling unit --
+       produced an undefined url, a PUT to "undefined", and the generic "that
+       upload did not go through". Read the status first and say what the
+       server actually said. */
+    const r = await fetch(`${API}/upload-url`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ puCode: code }),
-    })).json();
+    });
+    let payload = {};
+    try { payload = await r.json(); } catch { payload = {}; }
+    if (!r.ok) {
+      toast(payload.error || `Could not start the upload (HTTP ${r.status}).`, 10000);
+      await loadSummary({ fresh: true });   // pick up an uploads-closed switch
+      return;
+    }
+    const { url, key } = payload;
 
     const putRes = await fetch(url, { method: 'PUT', body: file });
     if (!putRes.ok) throw new Error('upload failed');
 
     toast('Reading the result sheet…', 60000);
-    const done = await (await fetch(`${API}/upload-done`, {
+    const doneRes = await fetch(`${API}/upload-done`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ puCode: code, key, deviceId }),
-    })).json();
+    });
+    let done = {};
+    try { done = await doneRes.json(); } catch { done = {}; }
+    if (!doneRes.ok) {
+      toast(done.error || `The photo was uploaded but could not be read (HTTP ${doneRes.status}).`, 10000);
+      await loadSummary({ fresh: true });
+      return;
+    }
 
     toast(done.message, 12000);
     await loadSummary({ fresh: true });

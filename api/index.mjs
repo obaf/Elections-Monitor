@@ -19,6 +19,16 @@ const UPLOADS_OFF =
   'Uploads are currently closed. They are opened by the administrator while ' +
   'an election is being monitored.';
 
+/* 409, not the obvious 403.
+ *
+ * CloudFront's custom_error_response is distribution-wide and maps 403 to the
+ * site's HTML error page -- the same trap already documented for 404 in
+ * infra/main.tf. A 403 here reached the browser as "Not Found" markup instead
+ * of this JSON, so the visitor was told the page did not exist rather than
+ * that uploads were closed. Any status the distribution rewrites is unusable
+ * for an API error. */
+const UPLOADS_OFF_STATUS = 409;
+
 /* ------------------------------- admin auth ------------------------------ */
 
 let adminCache = null;
@@ -391,7 +401,7 @@ export const handler = async (event) => {
     /* ---- public ---- */
 
     if (method === 'POST' && path === '/upload-url') {
-      if (!(await siteConfig()).uploadsEnabled) return json(403, { error: UPLOADS_OFF });
+      if (!(await siteConfig()).uploadsEnabled) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
       const puCode = String(body.puCode || '').trim();
       if (!/^[0-9-]{6,20}$/.test(puCode)) return json(400, { error: 'bad polling unit' });
       const key = `${LIVE.photoPrefix}/${puCode}/${randomUUID()}.jpg`;
@@ -407,7 +417,7 @@ export const handler = async (event) => {
     }
 
     if (method === 'POST' && path === '/upload-done') {
-      if (!(await siteConfig()).uploadsEnabled) return json(403, { error: UPLOADS_OFF });
+      if (!(await siteConfig()).uploadsEnabled) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
       const puCode = String(body.puCode || '').trim();
       const key = String(body.key || '');
       const deviceId = String(body.deviceId || '').slice(0, 64);
