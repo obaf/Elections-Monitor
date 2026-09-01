@@ -8,8 +8,9 @@
 ###############################################################################
 
 locals {
-  photo_bucket = "${local.domain_slug}-photos-${data.aws_caller_identity.current.account_id}"
-  api_name     = "${local.domain_slug}-api"
+  photo_bucket   = "${local.domain_slug}-photos-${data.aws_caller_identity.current.account_id}"
+  archive_bucket = "${local.domain_slug}-osun-archive-${data.aws_caller_identity.current.account_id}"
+  api_name       = "${local.domain_slug}-api"
 }
 
 ###############################################################################
@@ -84,6 +85,84 @@ resource "aws_s3_bucket_policy" "photos" {
   })
 
   depends_on = [aws_s3_bucket_public_access_block.photos]
+}
+
+###############################################################################
+# Osun archive -- the finished election's photos, kept separate from the live one
+#
+# The Osun election is over. Its result sheets are evidence and stay publicly
+# viewable, but they are no longer part of the election being monitored, so
+# they live in their own bucket behind their own CloudFront path. Objects are
+# copied in under an "osun-archive/" prefix that matches the URL exactly, so
+# the archive needs no path rewriting at the edge.
+#
+# Versioning is on here and not on the live photo bucket: this is the copy that
+# has to survive a mistake, and there is a fixed, small number of objects in it.
+###############################################################################
+
+resource "aws_s3_bucket" "osun_archive" {
+  bucket = local.archive_bucket
+}
+
+resource "aws_s3_bucket_public_access_block" "osun_archive" {
+  bucket                  = aws_s3_bucket.osun_archive.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_versioning" "osun_archive" {
+  bucket = aws_s3_bucket.osun_archive.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "osun_archive" {
+  bucket = aws_s3_bucket.osun_archive.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+    bucket_key_enabled = true
+  }
+}
+
+# An archive is cold by definition, so move it down a class quickly. The photos
+# stay immediately readable -- STANDARD_IA is a price change, not a retrieval
+# delay like Glacier would be.
+resource "aws_s3_bucket_lifecycle_configuration" "osun_archive" {
+  bucket = aws_s3_bucket.osun_archive.id
+
+  rule {
+    id     = "archive-is-cold"
+    status = "Enabled"
+    filter {}
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+  }
+}
+
+resource "aws_s3_bucket_policy" "osun_archive" {
+  bucket = aws_s3_bucket.osun_archive.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowCloudFrontRead"
+      Effect    = "Allow"
+      Principal = { Service = "cloudfront.amazonaws.com" }
+      Action    = "s3:GetObject"
+      Resource  = "${aws_s3_bucket.osun_archive.arn}/*"
+      Condition = {
+        StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.site.arn }
+      }
+    }]
+  })
+
+  depends_on = [aws_s3_bucket_public_access_block.osun_archive]
 }
 
 ###############################################################################
@@ -215,9 +294,10 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      TABLE        = aws_dynamodb_table.app.name
-      PHOTO_BUCKET = aws_s3_bucket.photos.id
-      ADMIN_PARAM  = "/irev2/admin"
+      TABLE          = aws_dynamodb_table.app.name
+      PHOTO_BUCKET   = aws_s3_bucket.photos.id
+      ARCHIVE_BUCKET = aws_s3_bucket.osun_archive.id
+      ADMIN_PARAM    = "/irev2/admin"
     }
   }
 

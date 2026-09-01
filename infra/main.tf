@@ -195,6 +195,12 @@ resource "aws_cloudfront_distribution" "site" {
     origin_access_control_id = aws_cloudfront_origin_access_control.site.id
   }
 
+  origin {
+    origin_id                = "s3-osun-archive"
+    domain_name              = aws_s3_bucket.osun_archive.bucket_regional_domain_name
+    origin_access_control_id = aws_cloudfront_origin_access_control.site.id
+  }
+
   # Serving the API through the same distribution keeps everything same-origin,
   # so the browser never needs a CORS preflight on an API call.
   origin {
@@ -237,6 +243,20 @@ resource "aws_cloudfront_distribution" "site" {
   ordered_cache_behavior {
     path_pattern           = "/photos/*"
     target_origin_id       = "s3-photos"
+    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods        = ["GET", "HEAD"]
+    cached_methods         = ["GET", "HEAD"]
+    compress               = false
+
+    cache_policy_id = data.aws_cloudfront_cache_policy.optimized.id
+  }
+
+  # The Osun archive. Finished results never change, so this is the most
+  # cacheable content on the site -- serve it from the edge and leave the
+  # archive bucket effectively untouched.
+  ordered_cache_behavior {
+    path_pattern           = "/osun-archive/*"
+    target_origin_id       = "s3-osun-archive"
     viewer_protocol_policy = "redirect-to-https"
     allowed_methods        = ["GET", "HEAD"]
     cached_methods         = ["GET", "HEAD"]

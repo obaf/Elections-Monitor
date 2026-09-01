@@ -13,26 +13,43 @@
 <div class="topbar">
   <span id="admin-flag" class="admin-flag" hidden>ADMIN MODE — you can approve photos manually</span>
   <button id="admin-login-btn" class="btn btn-small">admin login</button>
+  <button id="uploads-toggle-btn" class="btn btn-small" hidden></button>
   <button id="admin-logout-btn" class="btn btn-small" hidden>log out</button>
 </div>
 
-<p class="notice" role="status">
+<p id="archive-banner" class="notice notice-archive" role="status" hidden>
+  You are viewing the <strong>Osun election archive</strong>. This election is
+  finished: the results and the result sheets behind them are kept here as a
+  public record and cannot be added to.
+</p>
+
+<p id="uploads-closed" class="notice notice-closed" role="status" hidden>
+  Uploads are currently closed. Results can still be viewed, but new photos
+  cannot be sent in until the administrator opens uploads for an election.
+</p>
+
+<p id="location-notice" class="notice" role="status">
   Please enable “location services” on your phone and also give your camera
   permissions to tag photos with location data
 </p>
 
 <header class="hero">
-  <h1>OSUN/PRESIDENTIAL ELECTIONS MONITORING WEBSITE</h1>
-  <h2>COME BACK ON JAN 16TH 2027 TO UPLOAD PRESIDENTIAL ELECTION RESULTS</h2>
+  <div class="hero-top">
+    <button id="safe-harbour-btn" class="btn btn-quiet btn-small">Safe Harbour Statement</button>
+  </div>
 
+  <h1>OSUN/PRESIDENTIAL ELECTIONS MONITORING WEBSITE</h1>
+  <p class="hero-note">COME BACK ON JAN 16TH 2027 TO UPLOAD PRESIDENTIAL ELECTION RESULTS</p>
 
   <section class="totals" aria-labelledby="totals-h">
     <h2 id="totals-h">TOTAL RESULTS SO FAR</h2>
-    <div id="totals" class="tiles"><p class="muted">Loading totals…</p></div>
+    <div id="totals"><p class="muted">Loading totals…</p></div>
   </section>
 
   <div class="admin-actions">
     <a class="btn btn-breakdown" href="/breakdown.html">See Breakdown</a>
+    <a id="archive-link" class="btn btn-breakdown" href="/?election=osun">View Osun election archive</a>
+    <a id="live-link" class="btn btn-breakdown" href="/" hidden>Back to the presidential election</a>
     <a id="upload-count-btn" class="btn btn-breakdown" href="/uploads.html" hidden>See upload count</a>
     <a id="admin-msgs-btn" class="btn btn-breakdown" href="/admin-messages.html" hidden>Messages to admin</a>
   </div>
@@ -104,6 +121,19 @@
   <div class="dlg-actions">
     <button id="admin-go" class="btn btn-primary">Log in</button>
     <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="safe-harbour-dlg" class="dlg">
+  <h2>Safe Harbour Statement</h2>
+  <p class="sh-text">
+    irev2.com is an independent citizen election-results monitoring platform.
+    The information and materials published on this website are provided for
+    informational, transparency and verification purposes only and should not
+    be regarded as official election results.
+  </p>
+  <div class="dlg-actions">
+    <button class="btn btn-primary" data-close>Close</button>
   </div>
 </dialog>
 

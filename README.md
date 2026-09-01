@@ -1,8 +1,47 @@
-# Osun Election Monitoring Portal — irev2.com
+# Osun / Presidential Election Monitoring Portal — irev2.com
 
 Citizens photograph polling unit result sheets; the portal reads the figures off
 the photo and adds them to a public running total once two independent phones
 agree. Deployed to AWS on every push to `main`.
+
+## Two elections
+
+The Osun election is **finished and archived**; the **presidential** election is
+the live one. Both are served by the same code and the same table, separated by
+key namespace:
+
+| | Osun (archived) | Presidential (live) |
+|---|---|---|
+| Totals item | `AGG / TOTALS` | `AGG / TOTALS#PRESIDENTIAL` |
+| Counters | `CNT / <pu>` | `CNT#PRESIDENTIAL / <pu>` |
+| Uploads | `PU#<pu>` | `PU#PRESIDENTIAL#<pu>` |
+| Recent feed | `UPL` | `UPL#PRESIDENTIAL` |
+| Audit | `AUDIT` | `AUDIT#PRESIDENTIAL` |
+| Photos | `osun-archive/photos/…` in the archive bucket, at `/osun-archive/*` | `photos/presidential/…` in the photo bucket, at `/photos/*` |
+
+**Osun deliberately keeps the original, unprefixed keys.** That is the whole
+point of the layout: splitting the elections rewrote no existing item, so there
+was no migration step that could drop a result. Only the new election is
+prefixed. `tools/test_elections.mjs` asserts this against the literal strings
+the live data uses — if a refactor ever gives Osun a prefix, every Osun result
+disappears from the site while still sitting in the table, and that test is what
+catches it.
+
+Approve and revoke are refused on an archived election: a published historical
+total is not editable.
+
+The Osun archive stays fully viewable — `/?election=osun` for the polling unit
+grid and its result sheets, `/breakdown.html?election=osun` for the tabulation.
+
+## Uploads are switched on and off
+
+Between elections the portal stays up and readable but accepts nothing new. The
+admin toggles this with **Enable/Disable uploads** (front page top bar, and the
+admin console). The state lives in `AGG / CONFIG`; `/upload-url` and
+`/upload-done` both refuse while it is off, so closing uploads is enforced at
+the API and not only in the page. **Absent config means closed** — a portal that
+accepts photos because a settings row has not been written yet is the wrong
+failure direction.
 
 ```
 Route 53 (A/AAAA alias, apex + www)
@@ -48,7 +87,7 @@ portal costs essentially nothing. Textract runs exactly once per photo.
 | [api/](api/) | The API Lambda. Dependency-free: SigV4 is signed by hand so CI needs no `npm install` |
 | [infra/](infra/) | S3 + CloudFront + ACM + Route 53 + DynamoDB + Lambda — applied by CI |
 | [bootstrap/](bootstrap/) | One-time setup: state bucket, OIDC provider, deploy role |
-| [tools/](tools/) | Generates and uploads geotagged sample result sheets |
+| [tools/](tools/) | Generates and uploads geotagged sample result sheets; archives the Osun photos |
 | [.github/workflows/deploy.yml](.github/workflows/deploy.yml) | The pipeline |
 
 ## Admin
@@ -156,3 +195,24 @@ posted as a comment and apply nothing.
 - `create_oidc_provider = false` in `bootstrap/` if
   `token.actions.githubusercontent.com` already exists in the account (AWS
   permits only one provider per URL).
+
+## Archiving the Osun photos
+
+`python tools/archive_osun_photos.py` copies every Osun result sheet into
+`irev2-com-osun-archive-<account>` under an `osun-archive/` prefix that matches
+its public URL exactly, so CloudFront needs no path-rewriting function at the
+edge. The copy is verified object-by-object on byte count.
+
+Nothing is deleted. An election archive is evidence, so the destructive half is
+a separate, explicit decision (`--delete-source`) to be taken by a human once
+the copy has been confirmed good.
+
+## Tests
+
+`for f in tools/test_*.mjs; do node $f; done` runs the suite.
+
+`tools/test_browser_e2e.mjs` is **destructive and runs against the deployed
+site** — it uploads a photo, approves it, and permanently changes the public
+totals. It refuses to start without `IREV2_E2E_WRITE_TO_LIVE=1`, because being
+named `test_*` should not imply permission to rewrite a published election
+tally.

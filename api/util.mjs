@@ -150,7 +150,7 @@ export const inOsun = (gps) =>
 // added by an admin, so this is a starting point rather than a closed set.
 export const PARTIES = [
   'A', 'AA', 'AAC', 'ADC', 'ADP', 'APC', 'APGA', 'APM', 'APP', 'BP', 'LP',
-  'NNPP', 'NRM', 'PDP', 'PRP', 'SDP', 'YPP', 'ZLP', 'NCP', 'ANDP', 'YP', 'ACD',
+  'NNPP', 'NRM', 'NDC', 'PDP', 'PRP', 'SDP', 'YPP', 'ZLP', 'NCP', 'ANDP', 'YP', 'ACD',
   'ACCORD', 'PRM', 'MRM', 'NPC', 'BNPP', 'ADA',
 ];
 
@@ -277,3 +277,70 @@ export const json = (statusCode, body, extra = {}) => ({
   headers: { 'content-type': 'application/json', ...extra },
   body: JSON.stringify(body),
 });
+
+/* ---------------------------------------------------------------------------
+ * Elections.
+ *
+ * The Osun election is over and its results are an archive; the presidential
+ * election is the live one. Both live in the same table, separated by key
+ * namespace rather than by a new table, so a read is still a single-partition
+ * Query and the cost shape is unchanged.
+ *
+ * Osun deliberately keeps the ORIGINAL unprefixed keys ('AGG/TOTALS', 'CNT',
+ * 'PU#<code>', 'UPL', 'AUDIT'). That is the whole point: archiving Osun
+ * rewrites no existing item, so there is no migration step that could lose a
+ * result. Only the new election gets a prefix.
+ * ------------------------------------------------------------------------- */
+
+export const CURRENT_ELECTION = 'presidential';
+
+export const ELECTIONS = {
+  osun: {
+    id: 'osun',
+    label: 'Osun Election Results',
+    archived: true,
+    // Shown as the tile row even before any figure exists, so the row has a
+    // shape on an empty election instead of collapsing to nothing.
+    display: ['ACCORD', 'APC', 'ADC'],
+  },
+  presidential: {
+    id: 'presidential',
+    label: 'Presidential Election Results',
+    archived: false,
+    display: ['NDC', 'APC', 'PDP'],
+  },
+};
+
+export const isElection = (id) => Object.prototype.hasOwnProperty.call(ELECTIONS, id);
+
+// Normalises anything arriving from a query string or body into a valid id.
+export const electionOf = (raw, fallback = CURRENT_ELECTION) => {
+  const id = String(raw || '').toLowerCase().trim();
+  return isElection(id) ? id : fallback;
+};
+
+/* Key layout for one election. `legacy` is Osun, whose keys predate the split
+ * and must not change. */
+export function keysFor(id) {
+  const e = ELECTIONS[isElection(id) ? id : CURRENT_ELECTION];
+  const legacy = e.id === 'osun';
+  const SUF = e.id.toUpperCase();
+  return {
+    id: e.id,
+    label: e.label,
+    archived: e.archived,
+    display: e.display,
+    totals: legacy ? 'TOTALS' : `TOTALS#${SUF}`,
+    parties: legacy ? 'PARTIES' : `PARTIES#${SUF}`,
+    cnt: legacy ? 'CNT' : `CNT#${SUF}`,
+    upl: legacy ? 'UPL' : `UPL#${SUF}`,
+    audit: legacy ? 'AUDIT' : `AUDIT#${SUF}`,
+    pu: (code) => (legacy ? `PU#${code}` : `PU#${SUF}#${code}`),
+    // Where new photos are written. Osun's existing objects are already under
+    // 'photos/<pu>/', so its prefix stays exactly that.
+    photoPrefix: legacy ? 'photos' : `photos/${e.id}`,
+    // Osun photos are served from the archive bucket behind /osun-archive/*;
+    // the live election's come from the photo bucket behind /photos/*.
+    photoUrl: (key) => (legacy ? `/osun-archive/${key}` : `/${key}`),
+  };
+}

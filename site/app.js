@@ -4,7 +4,7 @@
 const API = '/api';
 const BATCH = 150;               // rows rendered per scroll step
 let DATA = null;                 // { lgas, wards, pus }
-let SUMMARY = { totals: {}, counts: {} };
+let SUMMARY = { totals: {}, counts: {}, elections: {}, current: 'presidential', uploadsEnabled: false };
 let filtered = [];
 let rendered = 0;
 let pendingPu = null;            // polling unit awaiting a file pick
@@ -15,6 +15,14 @@ const OCR = {};                  // uploadId -> figures as Textract read them
    Same storage key as admin.html, so a login on either carries across. */
 let adminToken = sessionStorage.getItem('irev2-admin') || '';
 const isAdmin = () => !!adminToken;
+
+/* Which election the grid is showing. The front page is the live contest by
+   default; ?election=osun turns the same page into the Osun archive, so the
+   finished election's result sheets stay reachable and viewable through the
+   familiar polling-unit list rather than needing a second screen. */
+const VIEW = (new URLSearchParams(location.search).get('election') || '').toLowerCase() === 'osun'
+  ? 'osun' : 'presidential';
+const IS_ARCHIVE = VIEW === 'osun';
 
 /* Stable per-browser id. The "two different phones" rule needs to tell
    devices apart; this is the cheapest honest signal available client-side. */
@@ -41,23 +49,58 @@ function toast(msg, ms = 7000) {
 
 /* ------------------------------- totals --------------------------------- */
 
+/* Each election gets its own labelled row, so the finished Osun figures and
+   the live presidential ones are never read as one number. A row keeps its
+   shape before any result exists: the parties on the ballot are shown with a
+   placeholder rather than the row collapsing to a sentence. */
+const ZERO = '000';
+
+function tile(party, votes) {
+  const v = votes === null || votes === undefined ? ZERO : nf.format(votes);
+  return `<div class="tile"><div class="p">${esc(party)}</div><div class="v">${v}</div></div>`;
+}
+
+function electionRow(e) {
+  const totals = e.totals || {};
+  const scored = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
+  /* With figures, show them highest first. Without, show the expected parties
+     as 000 -- the row still says which contest it is and who is on it. */
+  const tiles = scored.length
+    ? scored.map(([p, v]) => tile(p, v)).join('')
+    : (e.display || []).map((p) => tile(p, null)).join('');
+
+  return `<div class="totals-row" data-election="${esc(e.id)}">
+    <div class="totals-label">${esc(e.label)}:</div>
+    <div class="tiles">${tiles}</div>
+  </div>`;
+}
+
 function renderTotals() {
-  const entries = Object.entries(SUMMARY.totals || {}).sort((a, b) => b[1] - a[1]);
   const el = $('#totals');
-  if (!entries.length) {
+  const order = [SUMMARY.current, ...Object.keys(SUMMARY.elections || {})]
+    .filter((id, i, a) => id && a.indexOf(id) === i && SUMMARY.elections?.[id]);
+
+  if (!order.length) {
     el.innerHTML = '<p class="muted">No verified results yet. Totals appear here once two matching photos ' +
                    'from two different phones are uploaded for a polling unit.</p>';
     return;
   }
-  el.innerHTML = entries
-    .map(([p, v]) => `<div class="tile"><div class="p">${esc(p)}</div><div class="v">${nf.format(v)}</div></div>`)
-    .join('');
+  // Osun first: it is the completed contest, and the screenshot the layout was
+  // specified from reads top-down from the finished election to the live one.
+  const ids = order.slice().sort((a, b) => {
+    const rank = (x) => (SUMMARY.elections[x].archived ? 0 : 1);
+    return rank(a) - rank(b);
+  });
+  el.innerHTML = ids.map((id) => electionRow(SUMMARY.elections[id])).join('');
 }
 
 /* -------------------------------- grid ---------------------------------- */
 
+const viewCounts = () => SUMMARY.elections?.[VIEW]?.counts || {};
+
 function uploadLabel(code) {
-  const [n = 0, counted = 0] = SUMMARY.counts[code] || [];
+  const [n = 0, counted = 0] = viewCounts()[code] || [];
   if (counted) return `<span class="done-note">${n} uploads done – no need for further uploads</span>`;
   return `${n} upload${n === 1 ? '' : 's'} done`;
 }
@@ -66,10 +109,11 @@ function rowHtml(pu) {
   const [code, name, wardIdx] = pu;
   const [wardName, lgaIdx] = DATA.wards[wardIdx];
   const lga = DATA.lgas[lgaIdx];
-  const [n = 0] = SUMMARY.counts[code] || [];
+  const [n = 0] = viewCounts()[code] || [];
   return `<tr data-code="${esc(code)}">
     <td class="col-upload">
-      <button class="btn btn-primary btn-up" data-act="upload" data-code="${esc(code)}">Upload photo</button>
+      ${IS_ARCHIVE ? '' :
+        `<button class="btn btn-primary btn-up" data-act="upload" data-code="${esc(code)}">Upload photo</button>`}
       <button class="uploads-done" data-act="extract" data-code="${esc(code)}">${uploadLabel(code)}</button>
     </td>
     <td>
@@ -90,6 +134,7 @@ function renderMore() {
   if (!slice.length) { $('#more').textContent = ''; return; }
   $('#rows').insertAdjacentHTML('beforeend', slice.map(rowHtml).join(''));
   rendered += slice.length;
+  refreshUploadUi();   // the rows just added carry their own upload buttons
   $('#more').textContent = rendered < filtered.length
     ? `Showing ${nf.format(rendered)} of ${nf.format(filtered.length)} — scroll for more`
     : '';
@@ -123,7 +168,7 @@ const editRow = (party, votes) => `<tr>
  * The edit is validated again server-side and recorded in the audit trail
  * alongside what OCR originally said. */
 function adminBox(u, counted, code) {
-  if (!isAdmin() || counted) return '';
+  if (!isAdmin() || counted || IS_ARCHIVE) return '';
   const why = u.inOsun
     ? 'This photo has Osun location data but has not been matched by a second phone yet.'
     : 'This photo carries no Osun location data, so it cannot be counted automatically.';
@@ -206,7 +251,8 @@ async function toggleExtract(code, tr) {
 
   let data;
   try {
-    data = await (await fetch(`${API}/pu?code=${encodeURIComponent(code)}`)).json();
+    data = await (await fetch(
+      `${API}/pu?code=${encodeURIComponent(code)}&election=${encodeURIComponent(VIEW)}`)).json();
   } catch {
     row.innerHTML = `<td colspan="4">Could not load results. Please try again.</td>`;
     return;
@@ -230,7 +276,7 @@ async function toggleExtract(code, tr) {
     OCR[u.uploadId] = u.extracted || {};
     // For an admin about to approve, the editable table replaces the static one
     // rather than sitting under a duplicate of the same numbers.
-    const editing = isAdmin() && !data.counted;
+    const editing = isAdmin() && !data.counted && !IS_ARCHIVE;
     return `<div class="card">
       <div><strong>Photo ${i + 1}</strong> · ${new Date(u.ts).toLocaleString()} · ${badge}
            · <span class="pu-code">phone ${esc(u.device)}</span></div>
@@ -293,11 +339,30 @@ function refreshRow(code) {
   const tr = document.querySelector(`tr[data-code="${CSS.escape(code)}"]`);
   if (!tr) return;
   tr.querySelector('.uploads-done').innerHTML = uploadLabel(code);
-  const [n = 0] = SUMMARY.counts[code] || [];
+  const [n = 0] = viewCounts()[code] || [];
   tr.querySelector('.link-extract').textContent = n ? 'view extracted result' : 'no result yet';
 }
 
 /* --------------------------------- admin --------------------------------- */
+
+/* One place decides what "uploads are closed" looks like, so the banner, the
+   location hint and the buttons cannot drift out of step with each other. */
+function refreshUploadUi() {
+  // An archived election never accepts uploads, whatever the site-wide switch
+  // says -- the contest is finished, not merely paused.
+  const on = !IS_ARCHIVE && !!SUMMARY.uploadsEnabled;
+  $('#uploads-closed').hidden = on || IS_ARCHIVE;
+  $('#location-notice').hidden = !on;
+  document.querySelectorAll('.btn-up').forEach((b) => {
+    b.disabled = !on;
+    b.title = on ? '' : 'Uploads are currently closed';
+  });
+
+  const t = $('#uploads-toggle-btn');
+  t.hidden = !isAdmin() || IS_ARCHIVE;
+  t.textContent = on ? 'Disable uploads' : 'Enable uploads';
+  t.classList.toggle('btn-danger', on);
+}
 
 function refreshAdminUi() {
   $('#admin-flag').hidden = !isAdmin();
@@ -308,7 +373,54 @@ function refreshAdminUi() {
   // rather than the access control itself.
   $('#upload-count-btn').hidden = !isAdmin();
   $('#admin-msgs-btn').hidden = !isAdmin();
+  refreshUploadUi();
 }
+
+$('#safe-harbour-btn').addEventListener('click', () => {
+  $('#safe-harbour-dlg').showModal();
+});
+
+/* Opening and closing uploads. The portal stays up between elections -- results
+   remain viewable -- but nothing new can be sent in, which is what stops the
+   archive being polluted while no election is running. */
+$('#uploads-toggle-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  const next = !SUMMARY.uploadsEnabled;
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = next ? 'Enabling…' : 'Disabling…';
+  try {
+    const r = await fetch(`${API}/admin/uploads-enabled`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ enabled: next }),
+    });
+    if (r.status === 401) {
+      adminToken = '';
+      sessionStorage.removeItem('irev2-admin');
+      refreshAdminUi();
+      toast('Your admin session expired. Please log in again.');
+      return;
+    }
+    if (!r.ok) {
+      let msg = `Could not change uploads (HTTP ${r.status}).`;
+      try { msg = (await r.json()).error || msg; } catch { /* keep the status message */ }
+      toast(msg, 10000);
+      btn.textContent = original;
+      return;
+    }
+    SUMMARY.uploadsEnabled = (await r.json()).uploadsEnabled;
+    toast(SUMMARY.uploadsEnabled
+      ? 'Uploads are now OPEN — the public can send in result photos.'
+      : 'Uploads are now CLOSED — the public can view results but cannot upload.', 9000);
+  } catch {
+    toast('Could not reach the server. Uploads were not changed.');
+    btn.textContent = original;
+  } finally {
+    btn.disabled = false;
+    refreshUploadUi();
+  }
+});
 
 $('#admin-login-btn').addEventListener('click', () => {
   $('#login-err').hidden = true;
@@ -462,6 +574,12 @@ document.addEventListener('click', (e) => {
   }
 
   if (act === 'upload') {
+    // Checked here as well as server-side: the button is disabled when uploads
+    // are closed, but a page left open across a toggle would still be clickable.
+    if (!SUMMARY.uploadsEnabled) {
+      toast('Uploads are currently closed. Please come back when the administrator opens them.');
+      return;
+    }
     pendingPu = code;
     const pu = DATA?.pus.find((p) => p[0] === code);
     $('#source-pu').textContent = pu ? `${pu[1]} · ${code}` : code;
@@ -495,6 +613,7 @@ async function loadSummary({ fresh = false } = {}) {
     SUMMARY = await (await fetch(url, fresh ? { cache: 'no-store' } : undefined)).json();
   } catch { /* totals stay as they were; the grid still works */ }
   renderTotals();
+  refreshUploadUi();
 }
 
 /* The known-party set grows as sheets are read and as admins type corrections,
@@ -509,7 +628,19 @@ async function loadPartyList() {
   } catch { /* the field still accepts free text */ }
 }
 
+/* The archive is the same page with a different subject, so it says which
+   election is on screen instead of leaving the reader to notice the figures
+   changed. */
+function paintView() {
+  if (!IS_ARCHIVE) return;
+  document.title = 'Osun election archive — irev2.com';
+  $('#archive-banner').hidden = false;
+  $('#live-link').hidden = false;
+  $('#archive-link').hidden = true;
+}
+
 (async function init() {
+  paintView();
   refreshAdminUi();
   try {
     DATA = await (await fetch('/polling-units.json')).json();

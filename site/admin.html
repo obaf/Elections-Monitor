@@ -26,8 +26,10 @@
     <div class="row">
       <button id="tab-uploads" class="btn btn-primary">Uploads</button>
       <button id="tab-msgs" class="btn">Messages to admin</button>
+      <button id="uploads-toggle" class="btn">Enable/Disable uploads</button>
       <button id="out" class="btn">Log out</button>
     </div>
+    <p id="uploads-state" class="muted"></p>
     <div id="uploads"></div>
     <div id="msgs" hidden></div>
   </section>
@@ -48,8 +50,48 @@ const api = (p, opts = {}) => fetch(API + p, {
 function show() {
   $('#login').hidden = !!token;
   $('#panel').hidden = !token;
-  if (token) loadUploads();
+  if (token) { loadUploads(); loadUploadState(); }
 }
+
+/* Uploads are closed between elections. The state is read from the server
+   rather than remembered here, so two admins on two machines cannot disagree
+   about whether the portal is open. */
+let uploadsEnabled = false;
+
+function paintUploadState() {
+  $('#uploads-state').innerHTML = uploadsEnabled
+    ? 'Uploads are <strong>OPEN</strong> — the public can send in result photos.'
+    : 'Uploads are <strong>CLOSED</strong> — the public can view results but cannot upload.';
+  $('#uploads-toggle').textContent = uploadsEnabled ? 'Disable uploads' : 'Enable uploads';
+}
+
+async function loadUploadState() {
+  try {
+    const r = await api('/admin/uploads-enabled');
+    if (!r.ok) return;
+    uploadsEnabled = !!(await r.json()).uploadsEnabled;
+    paintUploadState();
+  } catch { /* leave the last known state on screen */ }
+}
+
+$('#uploads-toggle').addEventListener('click', async () => {
+  const btn = $('#uploads-toggle');
+  btn.disabled = true;
+  try {
+    const r = await api('/admin/uploads-enabled', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !uploadsEnabled }),
+    });
+    if (r.status === 401) { token = ''; sessionStorage.removeItem('irev2-admin'); show(); return; }
+    if (!r.ok) { $('#uploads-state').textContent = 'Could not change uploads. Please try again.'; return; }
+    uploadsEnabled = !!(await r.json()).uploadsEnabled;
+    paintUploadState();
+  } catch {
+    $('#uploads-state').textContent = 'Could not reach the server. Uploads were not changed.';
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 $('#go').addEventListener('click', async () => {
   $('#err').textContent = 'Checking…';

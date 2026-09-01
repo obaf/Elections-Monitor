@@ -19,7 +19,11 @@
 </div>
 
 <div class="page">
-  <h1>Upload count</h1>
+  <h1 id="uc-title">Upload count</h1>
+  <div class="election-tabs">
+    <a class="btn btn-small" data-etab="presidential" href="/uploads.html">Presidential election</a>
+    <a class="btn btn-small" data-etab="osun" href="/uploads.html?election=osun">Osun election (archived)</a>
+  </div>
   <p class="muted" id="intro">Every polling unit that has had at least one photo uploaded,
      whether or not the result has been added to the totals.</p>
 
@@ -80,6 +84,11 @@ let rendered = 0;
 let adminToken = sessionStorage.getItem('irev2-admin') || '';
 const isAdmin = () => !!adminToken;
 
+// Counts are per election: the presidential election starts from nothing, and
+// the Osun figures stay readable under their own tab.
+const ELECTION_ID = (new URLSearchParams(location.search).get('election') || '').toLowerCase() === 'osun'
+  ? 'osun' : 'presidential';
+
 function toast(msg, ms = 6000) {
   const t = $('#toast');
   t.textContent = msg; t.hidden = false;
@@ -135,12 +144,15 @@ function build() {
     : '';
   if (!units) {
     $('#rows').innerHTML = `<tr><td class="pu" colspan="3"><span class="muted">${
-      q ? 'No polling unit matches that search.' : 'No photos have been uploaded yet.'}</span></td></tr>`;
+      q ? 'No polling unit matches that search.'
+        : (ELECTION_ID === 'osun'
+            ? 'No photos are recorded for the Osun election.'
+            : 'No photos have been uploaded for the presidential election yet.')}</span></td></tr>`;
   }
 }
 
 async function load() {
-  const r = await fetch(`${API}/admin/upload-counts`, {
+  const r = await fetch(`${API}/admin/upload-counts?election=${encodeURIComponent(ELECTION_ID)}`, {
     headers: { authorization: `Bearer ${adminToken}` },
   });
   if (r.status === 401) {
@@ -209,6 +221,16 @@ document.addEventListener('click', (e) => {
 let debounce;
 $('#q').addEventListener('input', () => {
   clearTimeout(debounce); debounce = setTimeout(build, 140);
+});
+
+document.title = ELECTION_ID === 'osun'
+  ? 'Osun upload count (archived) — irev2.com'
+  : 'Presidential upload count — irev2.com';
+$('#uc-title').textContent = ELECTION_ID === 'osun'
+  ? 'Upload count — Osun election (archived)'
+  : 'Upload count — presidential election';
+document.querySelectorAll('[data-etab]').forEach((a) => {
+  a.classList.toggle('btn-primary', a.dataset.etab === ELECTION_ID);
 });
 
 refreshAdminUi();

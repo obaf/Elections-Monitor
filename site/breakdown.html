@@ -17,7 +17,16 @@
 </div>
 
 <div class="page wide">
-  <h1>Breakdown of results</h1>
+  <h1 id="bd-title">Breakdown of results</h1>
+  <div class="election-tabs">
+    <a class="btn btn-small" data-etab="presidential" href="/breakdown.html">Presidential election</a>
+    <a class="btn btn-small" data-etab="osun" href="/breakdown.html?election=osun">Osun election (archived)</a>
+  </div>
+  <p id="archive-note" class="notice" role="status" hidden>
+    These are the final Osun election results. The Osun election is closed:
+    the figures and the result sheets behind them are kept here as a public
+    record and can no longer be changed.
+  </p>
   <p class="muted" id="intro">Loading…</p>
 
   <div class="toolbar">
@@ -95,6 +104,14 @@ let rendered = 0;
 let adminToken = sessionStorage.getItem('irev2-admin') || '';
 const isAdmin = () => !!adminToken;
 
+/* Which election this page is showing. Osun is the finished contest kept as an
+   archive; presidential is the live one. Everything below reads this rather
+   than assuming a single set of results. */
+const ELECTION = (new URLSearchParams(location.search).get('election') || 'presidential').toLowerCase();
+const ELECTION_ID = ELECTION === 'osun' ? 'osun' : 'presidential';
+const IS_ARCHIVE = ELECTION_ID === 'osun';
+const q = (extra = '') => `?election=${encodeURIComponent(ELECTION_ID)}${extra}`;
+
 function toast(msg, ms = 6000) {
   const t = $('#toast');
   t.textContent = msg; t.hidden = false;
@@ -140,9 +157,9 @@ function rowHtml(pu) {
     const st = statusOf(code);
     const why = (st.key === 'revoked' && bd?.reason) ? `<div class="why">“${esc(bd.reason)}”</div>` : '';
     extra = `<td><span class="pill pill-${st.key}">${st.label}</span>${why}</td>` +
-      (st.key === 'added'
+      (st.key === 'added' && !IS_ARCHIVE
         ? `<td><button class="btn btn-small btn-revoke" data-revoke="${esc(code)}">Revoke</button></td>`
-        : '<td><span class="muted">—</span></td>');
+        : `<td><span class="muted">${IS_ARCHIVE && st.key === 'added' ? 'archived' : '—'}</span></td>`);
   }
 
   return `<tr data-code="${esc(code)}">
@@ -244,7 +261,7 @@ function describe() {
 async function load() {
   const [units, bd] = await Promise.all([
     fetch('/polling-units.json').then((r) => r.json()),
-    fetch(`${API}/breakdown`).then((r) => r.json()),
+    fetch(`${API}/breakdown${q()}`).then((r) => r.json()),
   ]);
   DATA = units;
   BD = {};
@@ -345,7 +362,7 @@ $('#revoke-go').addEventListener('click', async () => {
     const r = await fetch(`${API}/admin/revoke`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
-      body: JSON.stringify({ puCode: revokeTarget, reason }),
+      body: JSON.stringify({ puCode: revokeTarget, reason, election: ELECTION_ID }),
     });
     if (r.status === 401) {
       adminToken = ''; sessionStorage.removeItem('irev2-admin');
@@ -370,7 +387,7 @@ async function loadAudit() {
   const box = $('#audit');
   box.hidden = false;
   box.innerHTML = '<p class="muted">Loading audit log…</p>';
-  const r = await fetch(`${API}/admin/audit`, { headers: { authorization: `Bearer ${adminToken}` } });
+  const r = await fetch(`${API}/admin/audit${q()}`, { headers: { authorization: `Bearer ${adminToken}` } });
   if (!r.ok) { box.innerHTML = '<p class="muted">Could not load the audit log.</p>'; return; }
   const { entries } = await r.json();
   if (!entries.length) { box.innerHTML = '<p class="muted">No approvals or revocations recorded yet.</p>'; return; }
@@ -404,6 +421,23 @@ $('#show-all').addEventListener('change', build);
 new IntersectionObserver((en) => { if (en[0].isIntersecting && DATA) renderMore(); },
   { rootMargin: '400px' }).observe($('#sentinel'));
 
+/* The page is a different document depending on the election, so say which one
+   in the title and mark the active tab rather than leaving the reader to infer
+   it from the figures. */
+function paintElection() {
+  document.title = IS_ARCHIVE
+    ? 'Osun election results (archived) — irev2.com'
+    : 'Presidential election breakdown — irev2.com';
+  $('#bd-title').textContent = IS_ARCHIVE
+    ? 'Osun election results — archived'
+    : 'Breakdown of presidential results';
+  $('#archive-note').hidden = !IS_ARCHIVE;
+  document.querySelectorAll('[data-etab]').forEach((a) => {
+    a.classList.toggle('btn-primary', a.dataset.etab === ELECTION_ID);
+  });
+}
+
+paintElection();
 refreshAdminUi();
 load().catch(() => { $('#intro').textContent = 'Could not load the breakdown. Please try again.'; });
 </script>

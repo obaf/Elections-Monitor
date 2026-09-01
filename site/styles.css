@@ -258,6 +258,70 @@ h1 {
 .tile .p { font-size: 12px; font-weight: 700; color: var(--muted); letter-spacing: .5px; }
 .tile .v { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
+/* One row per election: the label sits to the left of that election's tiles so
+   the two contests can never be read as a single running total. Below the
+   narrow breakpoint the label moves above its own tiles rather than shrinking
+   into a column too thin to read. */
+.totals-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  max-width: 900px;
+  margin: 0 auto 12px;
+  text-align: left;
+}
+.totals-row:last-child { margin-bottom: 0; }
+
+.totals-label {
+  flex: 0 0 auto;
+  min-width: 190px;
+  text-align: right;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--brand-dark);
+}
+
+/* The tiles keep their own centring inside the row. */
+.totals-row .tiles { margin: 0; justify-content: flex-start; }
+
+@media (max-width: 640px) {
+  .totals-row { flex-direction: column; align-items: stretch; gap: 6px; }
+  .totals-label { min-width: 0; text-align: center; }
+  .totals-row .tiles { justify-content: center; }
+}
+
+/* The Safe Harbour control sits above the site title, so it reads as a
+   statement about the whole site rather than about the results below it. */
+.hero-top { display: flex; justify-content: center; margin-bottom: 6px; }
+#safe-harbour-btn { text-decoration: underline; font-weight: 600; }
+
+.hero-note {
+  margin: 0 auto 20px;
+  max-width: 760px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--brand-dark);
+  letter-spacing: .3px;
+}
+
+.sh-text { margin: 0 0 8px; line-height: 1.55; }
+
+/* Uploads closed is a state of the whole portal, so it is coloured as a
+   warning rather than as the ordinary location hint it replaces. */
+.notice-closed {
+  background: #fff4f3;
+  border-color: #f0c9c6;
+  color: #7d1a15;
+  font-weight: 600;
+}
+
+.btn-danger { background: #7d1a15; border-color: #7d1a15; color: #fff; }
+.btn-danger:hover { background: #64140f; }
+
+.btn:disabled,
+.btn[disabled] { opacity: .45; cursor: not-allowed; }
+
 .admin-actions { margin-top: 18px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 
 .btn {
@@ -365,4 +429,23 @@ textarea, input[type=text], input[type=password] {
   .col-upload { width: 130px; }
   .col-extract { width: 120px; }
   td, th { padding: 8px; }
+}
+
+/* Election tabs on the breakdown and upload-count pages. The active one is
+   given .btn-primary in script, so the reader can see which contest is on
+   screen without reading the URL. */
+.election-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+}
+
+/* The archive is a different subject on the same page, so it is marked in a
+   calmer colour than the "uploads closed" warning it sits beside. */
+.notice-archive {
+  background: #eef4fb;
+  border-color: #c6d8ee;
+  color: #1d3f66;
+  font-weight: 600;
 }

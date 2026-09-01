@@ -60,6 +60,9 @@ async function render({ admin }) {
       setItem: (k, v) => store.set(k, v),
       removeItem: (k) => store.delete(k),
     },
+    // breakdown.html reads ?election= to decide which contest it is showing.
+    location: { search: '' },
+    URLSearchParams,
     IntersectionObserver: class { observe() {} },
     fetch: async (url) => ({
       ok: true, status: 200,

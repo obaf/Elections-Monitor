@@ -51,6 +51,8 @@ locals {
   state_bucket = "${local.domain_slug}-tfstate-${local.account_id}"
   site_bucket  = "${local.domain_slug}-site-${local.account_id}"
   photo_bucket = "${local.domain_slug}-photos-${local.account_id}"
+  # The finished Osun election's photos, kept apart from the live election.
+  archive_bucket = "${local.domain_slug}-osun-archive-${local.account_id}"
 
   github_sub_prefix = "repo:${var.github_owner}/${var.github_repo}"
 
@@ -239,6 +241,8 @@ data "aws_iam_policy_document" "deploy" {
       "arn:aws:s3:::${local.site_bucket}/*",
       "arn:aws:s3:::${local.photo_bucket}",
       "arn:aws:s3:::${local.photo_bucket}/*",
+      "arn:aws:s3:::${local.archive_bucket}",
+      "arn:aws:s3:::${local.archive_bucket}/*",
     ]
   }
 

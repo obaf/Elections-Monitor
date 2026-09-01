@@ -12,6 +12,23 @@ import { readFileSync } from 'node:fs';
 const require = createRequire('file:///C:/PHD_RESEARCH/_e2e/');
 const { chromium } = require('playwright-core');
 
+/* This test is DESTRUCTIVE and runs against the DEPLOYED site.
+ *
+ * It uploads a photo, approves it, and permanently changes the public totals
+ * -- there is no teardown, because an approve is deliberately not reversible
+ * without a reasoned revoke. Run from a `tools/test_*.mjs` glob alongside the
+ * pure unit tests, it silently rewrites live election results.
+ *
+ * So it refuses to start without an explicit opt-in. Nothing about the name
+ * "test" should imply permission to alter a published election tally. */
+if (!process.env.IREV2_E2E_WRITE_TO_LIVE) {
+  console.log('SKIPPED  tools/test_browser_e2e.mjs writes to the LIVE site.');
+  console.log('         It uploads and approves a result, changing the public totals.');
+  console.log('         Run it deliberately:  IREV2_E2E_WRITE_TO_LIVE=1 node tools/test_browser_e2e.mjs');
+  console.log('ALL PASSED (skipped)');
+  process.exit(0);
+}
+
 const BASE = process.argv[2] || 'https://www.irev2.com';
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const PU = '29-01-01-005';
