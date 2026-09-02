@@ -44,6 +44,10 @@ osun-polling-units.xlsx
 osun-polling-units.csv
 presidential-polling-units.xlsx
 presidential-polling-units.csv
+# The raw INEC dataset the national list is built from (35 MB). Kept locally so
+# tools/build_national_pu.py can be re-run without re-downloading; the source
+# URL is in the README if it is ever lost.
+inec-source-data.json
 .admin-ssm.json
 
 # Lambda build artefact
