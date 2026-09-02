@@ -538,3 +538,38 @@ textarea, input[type=text], input[type=password] {
 }
 .fig-was { margin: 6px 0 0; font-size: 12px; font-style: italic; }
 .fig-final { max-width: 320px; }
+
+/* Upload video sits beneath Upload photo. It is deliberately the quieter of
+   the two: a photo is what feeds the count, a video is supporting evidence. */
+.btn-video {
+  margin-top: 6px;
+  background: var(--card);
+  color: var(--brand-dark);
+  border-color: var(--brand-dark);
+}
+.btn-video:hover { background: #eef4ef; }
+
+/* The video block under a polling unit. An ordinary visitor sees the count and
+   the notice; an admin sees the recordings and the uploader's email. */
+.video-note {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--brand-dark);
+  border-radius: 8px;
+  background: var(--card);
+}
+.video-note .btn { margin-left: 10px; }
+.video-held-inline { margin: 8px 0 0; font-style: italic; }
+
+.video-item { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.video-item:first-of-type { border-top: 0; }
+.video-item video {
+  display: block;
+  margin: 8px 0;
+  max-width: 100%;
+  width: 420px;
+  border-radius: 8px;
+  background: #000;
+}
+.video-email { font-size: 13px; }

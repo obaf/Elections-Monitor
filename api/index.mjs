@@ -1,12 +1,25 @@
 import { createHmac, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
-import { ddb, textract, ssm, s3Get, s3List, s3Delete, item, plain, av } from './aws.mjs';
+import { ddb, textract, ssm, s3Get, s3Head, s3List, s3Delete, item, plain, av } from './aws.mjs';
 import {
-  presignPut, readGps, inOsun, parseResults, signature, json, PARTIES,
+  presignPut, presignGet, readGps, inOsun, parseResults, signature, json, PARTIES,
   ELECTIONS, CURRENT_ELECTION, REAL_ELECTIONS, TEST_ELECTION, electionOf, keysFor,
 } from './util.mjs';
 
 const TABLE = process.env.TABLE;
 const BUCKET = process.env.PHOTO_BUCKET;
+const VIDEO_BUCKET = process.env.VIDEO_BUCKET;
+
+// A phone clip of a result being read out is a minute or two. The cap is what
+// stops one upload becoming an unbounded storage bill.
+const MAX_VIDEO_BYTES = 200 * 1024 * 1024;
+
+const VIDEO_ACK =
+  'Thank you. Please, provide an email address so we can reach you in future';
+// Shown to an ordinary visitor who tries to play a video. They are not shown
+// the footage; they are told it is kept.
+const VIDEO_WITHHELD =
+  'Rest assured the video has been saved for future reference. They will be ' +
+  'admissible in court if the need arises';
 const REGION = process.env.AWS_REGION || 'us-east-1';
 
 const UPLOAD_ACK =
@@ -143,6 +156,8 @@ function assertTestNamespace(K) {
     K.totals.includes('#TEST') &&
     K.parties.includes('#TEST') &&
     K.photoPrefix === 'photos/test' &&
+    K.videoPrefix === 'videos/test' &&
+    K.vupl.includes('#TEST') &&
     K.pu('X').startsWith('PU#TEST#');
   if (!safe) {
     throw new Error(`refusing to wipe: ${K.id} is not the isolated test namespace`);
@@ -174,7 +189,7 @@ async function wipeTestData() {
   // records one. Using both means a partially written upload still gets swept.
   const codes = new Set();
 
-  for (const pk of [K.cnt, K.upl, K.audit]) {
+  for (const pk of [K.cnt, K.upl, K.audit, K.vupl]) {
     for (const row of await query(pk)) {
       keys.push({ pk, sk: row.sk });
       if (pk === K.cnt) codes.add(row.sk);
@@ -198,18 +213,34 @@ async function wipeTestData() {
 
   const items = await deleteKeys(keys);
 
-  // Test photos live under their own prefix, so the same reasoning applies.
-  let photos = 0;
-  const objects = await s3List(BUCKET, `${K.photoPrefix}/`);
-  for (const key of objects) {
-    if (!key.startsWith(`${K.photoPrefix}/`)) continue;   // never delete outside the prefix
-    await s3Delete(BUCKET, key);
-    photos++;
-  }
+  // Test media lives under its own prefix in each bucket, so the same
+  // reasoning applies -- and IAM only permits DeleteObject on those prefixes,
+  // so a mistake here cannot reach a real election's files either.
+  const sweep = async (bucket, prefix) => {
+    let n = 0;
+    for (const key of await s3List(bucket, `${prefix}/`)) {
+      if (!key.startsWith(`${prefix}/`)) continue;   // never delete outside the prefix
+      await s3Delete(bucket, key);
+      n++;
+    }
+    return n;
+  };
+
+  const photos = await sweep(BUCKET, K.photoPrefix);
+  const videos = VIDEO_BUCKET ? await sweep(VIDEO_BUCKET, K.videoPrefix) : 0;
 
   partyCache[K.id] = null;
-  console.log(`test wipe: removed ${items} items and ${photos} photos`);
-  return { items, photos, pollingUnits: codes.size };
+  console.log(`test wipe: removed ${items} items, ${photos} photos, ${videos} videos`);
+  return { items, photos, videos, pollingUnits: codes.size };
+}
+
+async function bumpVideoCount(K, puCode) {
+  await ddb('DynamoDB_20120810.UpdateItem', {
+    TableName: TABLE,
+    Key: item({ pk: K.cnt, sk: puCode }),
+    UpdateExpression: 'SET vn = if_not_exists(vn, :z) + :one',
+    ExpressionAttributeValues: item({ ':z': 0, ':one': 1 }),
+  });
 }
 
 async function bumpCount(K, puCode) {
@@ -555,6 +586,128 @@ export const handler = async (event) => {
      * visitor makes, which is exactly the cost this portal is built to avoid.
      * The flat `totals`/`counts` keys mirror the live election so an older
      * cached copy of app.js keeps working. */
+    /* ---- video ----
+     *
+     * Videos are evidence, not content. Anyone may add one; nobody but an
+     * admin may watch one. That asymmetry is why the bytes live in a bucket
+     * with no CloudFront origin: the only playable link is a presigned GET
+     * this API issues after checking an admin token.
+     */
+
+    if (method === 'POST' && path === '/video-url') {
+      const cfg = CFG;
+      if (!cfg.uploadsEnabled && !cfg.testMode) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const W = keysFor(liveElection(cfg));
+      const puCode = String(body.puCode || '').trim();
+      if (!/^[0-9-]{6,20}$/.test(puCode)) return json(400, { error: 'bad polling unit' });
+
+      // The extension is taken from a fixed list rather than from the filename,
+      // so a client cannot choose the key's suffix.
+      const kind = String(body.kind || '').toLowerCase();
+      const ext = kind.includes('quicktime') || kind.includes('mov') ? 'mov'
+        : kind.includes('webm') ? 'webm' : 'mp4';
+
+      const videoId = randomUUID();
+      const key = `${W.videoPrefix}/${puCode}/${videoId}.${ext}`;
+      const url = presignPut({
+        bucket: VIDEO_BUCKET, key, region: REGION,
+        creds: {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          sessionToken: process.env.AWS_SESSION_TOKEN,
+        },
+      });
+      return json(200, { url, key, videoId, election: W.id, maxBytes: MAX_VIDEO_BYTES });
+    }
+
+    if (method === 'POST' && path === '/video-done') {
+      const cfg = CFG;
+      if (!cfg.uploadsEnabled && !cfg.testMode) return json(UPLOADS_OFF_STATUS, { error: UPLOADS_OFF });
+      const W = keysFor(liveElection(cfg));
+      const puCode = String(body.puCode || '').trim();
+      const key = String(body.key || '');
+      const videoId = String(body.videoId || '');
+      const deviceId = String(body.deviceId || '').slice(0, 64);
+      if (!key.startsWith(`${W.videoPrefix}/${puCode}/`)) return json(400, { error: 'bad key' });
+      if (!/^[\w-]{8,64}$/.test(videoId)) return json(400, { error: 'bad video id' });
+
+      /* The size is read back from S3 rather than trusted from the client. A
+       * presigned PUT cannot carry a size limit, so this is where an oversized
+       * upload is caught -- and it is deleted rather than left to be paid for. */
+      let head;
+      try {
+        head = await s3Head(VIDEO_BUCKET, key);
+      } catch (e) {
+        console.error('video head failed', String(e));
+        return json(422, { error: 'That video did not finish uploading. Please try again.' });
+      }
+      if (!head.size) {
+        return json(422, { error: 'That video did not finish uploading. Please try again.' });
+      }
+      if (head.size > MAX_VIDEO_BYTES) {
+        await s3Delete(VIDEO_BUCKET, key).catch(() => {});
+        console.log(`video rejected: ${head.size} bytes over the ${MAX_VIDEO_BYTES} limit`);
+        return json(422, {
+          error: `That video is larger than ${Math.round(MAX_VIDEO_BYTES / 1024 / 1024)} MB. ` +
+                 'Please upload a shorter clip.',
+        });
+      }
+
+      const ts = new Date().toISOString();
+      const record = {
+        pk: W.pu(puCode),
+        sk: `VIDEO#${ts}#${videoId}`,
+        videoId, puCode, key, ts, deviceId,
+        election: W.id,
+        bytes: head.size,
+        contentType: head.type,
+        email: '',
+      };
+      await put(record);
+      await put({ ...record, pk: W.vupl, sk: `${ts}#${videoId}` });
+      await bumpVideoCount(W, puCode);
+
+      console.log(`video stored ${W.id}/${puCode} ${videoId} ${head.size} bytes`);
+      return json(200, { ok: true, videoId, election: W.id, message: VIDEO_ACK });
+    }
+
+    /* The uploader attaches an email to the clip they just sent. The videoId is
+     * the only thing that authorises this, which is the same standing an
+     * uploader has for the photo flow -- and the address is never returned by
+     * any public route, only to an admin. */
+    if (method === 'POST' && path === '/video-email') {
+      const cfg = CFG;
+      const W = keysFor(liveElection(cfg));
+      const puCode = String(body.puCode || '').trim();
+      const videoId = String(body.videoId || '');
+      const email = String(body.email || '').trim().slice(0, 254);
+      if (!/^[\w-]{8,64}$/.test(videoId)) return json(400, { error: 'bad video id' });
+      if (!/^[^@\s]+@[^@\s.]+\.[^@\s]{2,}$/.test(email)) {
+        return json(400, { error: 'That does not look like an email address.' });
+      }
+
+      const rows = (await query(W.pu(puCode))).filter(
+        (v) => v.sk?.startsWith('VIDEO#') && v.videoId === videoId);
+      if (!rows.length) return json(422, { error: 'That video is no longer listed for this polling unit.' });
+
+      const v = rows[0];
+      await ddb('DynamoDB_20120810.UpdateItem', {
+        TableName: TABLE,
+        Key: item({ pk: W.pu(puCode), sk: v.sk }),
+        UpdateExpression: 'SET email = :e',
+        ExpressionAttributeValues: item({ ':e': email }),
+      });
+      await ddb('DynamoDB_20120810.UpdateItem', {
+        TableName: TABLE,
+        Key: item({ pk: W.vupl, sk: `${v.ts}#${videoId}` }),
+        UpdateExpression: 'SET email = :e',
+        ExpressionAttributeValues: item({ ':e': email }),
+      }).catch(() => {});   // the feed row is a convenience, not the record
+
+      console.log(`video ${videoId} linked to an email address`);
+      return json(200, { ok: true });
+    }
+
     if (method === 'GET' && path === '/summary') {
       const cfg = CFG;
       // The test election is only ever shown while test mode is on, so an
@@ -633,6 +786,12 @@ export const handler = async (event) => {
         counted: !!cnt?.v,
         results: cnt?.res || {},
         status: cnt?.st || (cnt?.v ? 'added' : 'pending'),
+        /* This route is public, so it carries a COUNT and nothing else about
+         * the videos -- no key, no id, no uploader email, no playable link.
+         * A visitor learns that footage exists, not what is in it or who sent
+         * it. The count comes off the counter item, so it costs no extra read. */
+        videos: cnt?.vn || 0,
+        videoNotice: VIDEO_WITHHELD,
       });
     }
 
@@ -719,7 +878,7 @@ export const handler = async (event) => {
             await audit(LIVE, 'test-mode-off', '', {
               actor: cfg.username,
               reason: `wiped ${removed.items} items, ${removed.photos} photos, ` +
-                      `${removed.pollingUnits} polling units`,
+                      `${removed.videos} videos, ${removed.pollingUnits} polling units`,
             });
             console.log(`test mode OFF by ${cfg.username}; ${JSON.stringify(removed)}`);
             return json(200, { ok: true, testMode: false, removed });
@@ -759,6 +918,48 @@ export const handler = async (event) => {
           rows,
           totals: (await get('AGG', K.totals))?.p || {},
         });
+      }
+
+      /* The videos for one polling unit, with the uploader's email and a link
+       * that actually plays.
+       *
+       * The link is a presigned GET valid for fifteen minutes, issued only
+       * after the admin token above has been checked. The bucket has no
+       * CloudFront origin, so this is the only way any video is ever readable
+       * -- there is no public path to switch off. */
+      if (method === 'GET' && path === '/admin/videos') {
+        const code = String(qs.code || '').trim();
+        const creds = {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          sessionToken: process.env.AWS_SESSION_TOKEN,
+        };
+        const rows = (await query(K.pu(code)))
+          .filter((v) => v.sk?.startsWith('VIDEO#'))
+          .map((v) => ({
+            videoId: v.videoId,
+            puCode: v.puCode,
+            ts: v.ts,
+            bytes: v.bytes || 0,
+            contentType: v.contentType || 'video/mp4',
+            email: v.email || '',
+            url: presignGet({ bucket: VIDEO_BUCKET, key: v.key, region: REGION, expires: 900, creds }),
+            device: v.deviceId ? createHash('sha256').update(v.deviceId).digest('hex').slice(0, 6) : '?',
+          }));
+        rows.sort((a, b) => String(a.ts).localeCompare(String(b.ts)));
+        return json(200, { election: K.id, code, videos: rows }, { 'cache-control': 'no-store' });
+      }
+
+      // Every video across the election, newest first, for review.
+      if (method === 'GET' && path === '/admin/recent-videos') {
+        const items = await query(K.vupl, { ScanIndexForward: false, Limit: 200 });
+        return json(200, {
+          election: K.id,
+          videos: items.map((v) => ({
+            videoId: v.videoId, puCode: v.puCode, ts: v.ts,
+            bytes: v.bytes || 0, email: v.email || '',
+          })),
+        }, { 'cache-control': 'no-store' });
       }
 
       if (method === 'GET' && path === '/admin/threads') {

@@ -10,6 +10,7 @@
 locals {
   photo_bucket   = "${local.domain_slug}-photos-${data.aws_caller_identity.current.account_id}"
   archive_bucket = "${local.domain_slug}-osun-archive-${data.aws_caller_identity.current.account_id}"
+  video_bucket   = "${local.domain_slug}-videos-${data.aws_caller_identity.current.account_id}"
   api_name       = "${local.domain_slug}-api"
 }
 
@@ -166,6 +167,84 @@ resource "aws_s3_bucket_policy" "osun_archive" {
 }
 
 ###############################################################################
+# Video storage -- private, and deliberately NOT behind CloudFront
+#
+# Videos are admin-only: an ordinary visitor is told how many exist, never
+# shown one. That rule is enforced by there being NO PUBLIC PATH to this
+# bucket at all -- it is not a CloudFront origin, so no cache behaviour can
+# route to it and no bucket policy grants CloudFront read. The only way to play
+# an object is a presigned GET the Lambda issues after checking an admin token,
+# valid for fifteen minutes.
+#
+# That is a stronger guarantee than a rule saying "do not serve these": there
+# is no serving path to misconfigure in the first place.
+###############################################################################
+
+resource "aws_s3_bucket" "videos" {
+  bucket = local.video_bucket
+}
+
+resource "aws_s3_bucket_public_access_block" "videos" {
+  bucket                  = aws_s3_bucket.videos.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "videos" {
+  bucket = aws_s3_bucket.videos.id
+  rule {
+    apply_server_side_encryption_by_default { sse_algorithm = "AES256" }
+    bucket_key_enabled = true
+  }
+}
+
+# Uploaded straight from the phone with a presigned PUT, so the browser origin
+# has to be allowed to talk to S3 directly.
+resource "aws_s3_bucket_cors_configuration" "videos" {
+  bucket = aws_s3_bucket.videos.id
+
+  cors_rule {
+    allowed_methods = ["PUT", "GET"]
+    allowed_origins = [for d in local.all_domains : "https://${d}"]
+    allowed_headers = ["*"]
+    expose_headers  = ["ETag"]
+    max_age_seconds = 3000
+  }
+}
+
+# Video is the expensive thing on this portal by an order of magnitude: 100,000
+# clips at ~50 MB is ~5 TB. Almost none of it is ever watched -- it is evidence
+# held in case it is needed -- so it moves down the storage classes quickly.
+# Glacier Instant Retrieval is the floor rather than a deeper tier because
+# evidence that takes hours to restore is not much use in a dispute.
+resource "aws_s3_bucket_lifecycle_configuration" "videos" {
+  bucket = aws_s3_bucket.videos.id
+
+  rule {
+    id     = "cheapen-video"
+    status = "Enabled"
+    filter {}
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    transition {
+      days          = 120
+      storage_class = "GLACIER_IR"
+    }
+
+    # A multipart upload that never finished is invisible and still billed.
+    abort_incomplete_multipart_upload {
+      days_after_initiation = 3
+    }
+  }
+}
+
+###############################################################################
 # Data
 ###############################################################################
 
@@ -252,12 +331,29 @@ data "aws_iam_policy_document" "api" {
   }
 
   # Deleting is scoped by IAM to the test prefix as well as by the code, so a
-  # bug in the wipe still cannot reach a real election's photos.
+  # bug in the wipe still cannot reach a real election's photos or videos.
   statement {
-    sid       = "TestPhotoCleanup"
+    sid     = "TestMediaCleanup"
+    effect  = "Allow"
+    actions = ["s3:DeleteObject"]
+    resources = [
+      "${aws_s3_bucket.photos.arn}/photos/test/*",
+      "${aws_s3_bucket.videos.arn}/videos/test/*",
+    ]
+  }
+
+  statement {
+    sid       = "Videos"
     effect    = "Allow"
-    actions   = ["s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.photos.arn}/photos/test/*"]
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${aws_s3_bucket.videos.arn}/*"]
+  }
+
+  statement {
+    sid       = "VideosList"
+    effect    = "Allow"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.videos.arn]
   }
 
   # Textract reads the object itself, so it needs the bucket listed too.
@@ -311,6 +407,7 @@ resource "aws_lambda_function" "api" {
       TABLE          = aws_dynamodb_table.app.name
       PHOTO_BUCKET   = aws_s3_bucket.photos.id
       ARCHIVE_BUCKET = aws_s3_bucket.osun_archive.id
+      VIDEO_BUCKET   = aws_s3_bucket.videos.id
       ADMIN_PARAM    = "/irev2/admin"
     }
   }

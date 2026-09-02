@@ -288,6 +288,43 @@ They come from the counter item (`CNT.res`), the same row the totals were built
 from, rather than being copied onto each upload. One source of truth means the
 display cannot drift away from the tally.
 
+## Video
+
+Every polling unit takes an **Upload video** as well as a photo. Video is
+evidence rather than content: **anyone may add one, only an admin may watch
+one.** An ordinary visitor is told how many exist and nothing else.
+
+That rule is enforced structurally. Videos live in
+`irev2-com-videos-<account>`, which is **not a CloudFront origin at all** — no
+cache behaviour routes to it and no bucket policy grants CloudFront read, so
+there is no public path to an object in it. The only way to play one is a
+presigned GET the API issues after checking an admin token, valid 15 minutes.
+There is no serving path to misconfigure.
+
+| Route | Who | Returns |
+|---|---|---|
+| `POST /video-url` | anyone | presigned PUT; bytes go straight to S3 |
+| `POST /video-done` | anyone | records it; size read back from S3, oversized deleted |
+| `POST /video-email` | the uploader | links an email to that clip |
+| `GET /pu` | anyone | **a count only** — no key, no id, no email, no link |
+| `GET /admin/videos` | admin | the recordings, the emails, playable links |
+
+The email is asked for **after** the upload completes, so nobody is pressed for
+an address in order to finish sending evidence. It is stored on the clip and
+returned by no public route.
+
+Uploads are capped at 200 MB. A presigned PUT cannot carry a size limit, so
+`/video-done` reads the size back with a HEAD and deletes anything over the cap
+rather than leaving it to be paid for.
+
+Test-mode videos go to `videos/test/` under their own `VUPL#TEST` feed, and the
+wipe sweeps both. IAM grants `s3:DeleteObject` on `videos/test/*` only, so a bug
+in the wipe cannot reach real footage.
+
+Storage moves to STANDARD_IA at 30 days and GLACIER_IR at 120. Glacier Instant
+Retrieval is the floor rather than a deeper tier because evidence that takes
+hours to restore is not much use in a dispute.
+
 ## Archiving the Osun photos
 
 `python tools/archive_osun_photos.py` copies every Osun result sheet into

@@ -116,6 +116,11 @@
 <input id="file-camera" type="file" accept="image/*" capture="environment" hidden>
 <input id="file-library" type="file" accept="image/*" hidden>
 
+<!-- Same two-input reason as the photos: `capture` records now, its absence
+     offers the library. -->
+<input id="vid-camera" type="file" accept="video/*" capture="environment" hidden>
+<input id="vid-library" type="file" accept="video/*" hidden>
+
 <dialog id="source-dlg" class="dlg">
   <h2>Add a result photo</h2>
   <p class="muted" id="source-pu"></p>
@@ -123,6 +128,41 @@
     <button class="btn btn-primary" data-source="camera">Take a photo now</button>
     <button class="btn" data-source="library">Choose from photo library</button>
     <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<dialog id="vid-source-dlg" class="dlg">
+  <h2>Add a result video</h2>
+  <p class="muted" id="vid-source-pu"></p>
+  <div class="dlg-actions">
+    <button class="btn btn-primary" data-vsource="camera">Record a video now</button>
+    <button class="btn" data-vsource="library">Choose from video library</button>
+    <button class="btn btn-quiet" data-close>Cancel</button>
+  </div>
+</dialog>
+
+<!-- Asked for after the upload has finished, never before: the clip is already
+     saved by this point, so nobody is pressed for an address to complete it. -->
+<dialog id="email-dlg" class="dlg">
+  <h2>Video uploaded</h2>
+  <p id="email-ask">Thank you. Please, provide an email address so we can reach
+     you in future</p>
+  <label class="fld"><span>Email address</span>
+    <input id="video-email" type="email" autocomplete="email" placeholder="you@example.com"></label>
+  <p id="email-err" class="login-err" hidden></p>
+  <div class="dlg-actions">
+    <button id="email-save" class="btn btn-primary">Save my email</button>
+    <button class="btn btn-quiet" data-close>No thanks</button>
+  </div>
+</dialog>
+
+<!-- What an ordinary visitor gets instead of the footage. -->
+<dialog id="video-held-dlg" class="dlg">
+  <h2>Video held for evidence</h2>
+  <p id="video-held-msg">Rest assured the video has been saved for future
+     reference. They will be admissible in court if the need arises</p>
+  <div class="dlg-actions">
+    <button class="btn btn-primary" data-close>Close</button>
   </div>
 </dialog>
 

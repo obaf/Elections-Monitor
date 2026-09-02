@@ -13,7 +13,21 @@ export { randomUUID };
  * the managed Node runtime bundles the SDK clients but the presigner is not
  * guaranteed, and a missing module would only surface at runtime in CI.
  * ------------------------------------------------------------------------- */
-export function presignPut({ bucket, key, region, expires = 900, creds }) {
+export function presignPut(opts) {
+  return presign({ ...opts, method: 'PUT' });
+}
+
+/* Presigned GET is how an admin plays a video.
+ *
+ * The video bucket has no CloudFront origin at all, so there is no public path
+ * to an object in it -- a link is only playable because the Lambda signed one,
+ * and only for as long as the signature lasts. That is a stronger guarantee
+ * than a rule saying "do not serve these": there is nothing to misconfigure. */
+export function presignGet(opts) {
+  return presign({ ...opts, method: 'GET' });
+}
+
+export function presign({ bucket, key, region, expires = 900, creds, method = 'PUT' }) {
   const host = `${bucket}.s3.${region}.amazonaws.com`;
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
@@ -38,7 +52,7 @@ export function presignPut({ bucket, key, region, expires = 900, creds }) {
   const canonicalUri = '/' + key.split('/').map(encodeURIComponent).join('/');
 
   const canonicalRequest = [
-    'PUT',
+    method,
     canonicalUri,
     canonicalQuery,
     `host:${host}\n`,
@@ -363,6 +377,11 @@ export function keysFor(id) {
     // Where new photos are written. Osun's existing objects are already under
     // 'photos/<pu>/', so its prefix stays exactly that.
     photoPrefix: legacy ? 'photos' : `photos/${e.id}`,
+    // Videos live in their own bucket, so they need no legacy carve-out: none
+    // existed before this. The recent-uploads feed is separate from the photo
+    // one so an admin can review either without wading through the other.
+    vupl: legacy ? 'VUPL' : `VUPL#${SUF}`,
+    videoPrefix: `videos/${e.id}`,
     // Osun photos are served from the archive bucket behind /osun-archive/*;
     // the live election's come from the photo bucket behind /photos/*.
     photoUrl: (key) => (legacy ? `/osun-archive/${key}` : `/${key}`),

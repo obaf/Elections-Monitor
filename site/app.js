@@ -127,7 +127,8 @@ function rowHtml(pu) {
   return `<tr data-code="${esc(code)}">
     <td class="col-upload">
       ${IS_ARCHIVE ? '' :
-        `<button class="btn btn-primary btn-up" data-act="upload" data-code="${esc(code)}">Upload photo</button>`}
+        `<button class="btn btn-primary btn-up" data-act="upload" data-code="${esc(code)}">Upload photo</button>
+         <button class="btn btn-video btn-up" data-act="upload-video" data-code="${esc(code)}">Upload video</button>`}
       <button class="uploads-done" data-act="extract" data-code="${esc(code)}">${uploadLabel(code)}</button>
     </td>
     <td>
@@ -316,7 +317,13 @@ async function toggleExtract(code, tr) {
   }
 
   if (!data.uploads?.length) {
-    row.innerHTML = `<td colspan="4"><p class="muted">No photos uploaded for this polling unit yet.</p></td>`;
+    // A unit can have videos and no photos, so the panel is not empty merely
+    // because nothing was photographed.
+    row.innerHTML = `<td colspan="4">
+      <p class="muted">No photos uploaded for this polling unit yet.</p>
+      ${videoBlock(data, code)}</td>`;
+    const only = row.querySelector(`[data-videos-for="${CSS.escape(code)}"]`);
+    if (only && isAdmin()) loadAdminVideos(code, only);
     return;
   }
 
@@ -367,7 +374,12 @@ async function toggleExtract(code, tr) {
     ? '<p class="done-note">Verified — this result has been added to the totals above.</p>'
     : '<p class="muted">Not yet added to totals: needs two matching photos from two different phones, both with Osun location data.</p>';
 
-  row.innerHTML = `<td colspan="4">${status}${cards}</td>`;
+  row.innerHTML = `<td colspan="4">${status}${cards}${videoBlock(data, code)}</td>`;
+
+  // Presigned playback links are short-lived, so they are fetched when the
+  // panel opens rather than baked into the page.
+  const vHost = row.querySelector(`[data-videos-for="${CSS.escape(code)}"]`);
+  if (vHost && isAdmin()) loadAdminVideos(code, vHost);
 }
 
 /* -------------------------------- upload --------------------------------- */
@@ -428,6 +440,173 @@ async function handleFile(e) {
   } catch (err) {
     console.error(err);
     toast('Sorry, that upload did not go through. Please try again.');
+  }
+}
+
+/* ---------------------------------- video --------------------------------- */
+
+/* Video is evidence rather than content: anyone may add one, only an admin may
+   watch one. The upload half is the same shape as the photo flow -- presigned
+   PUT straight to S3, so the bytes never pass through the API -- and the email
+   is asked for AFTERWARDS, once the clip is already saved, so nobody is pressed
+   for an address in order to complete an upload. */
+let pendingVideoPu = null;
+let lastVideo = null;            // { puCode, videoId } awaiting an email
+
+['#vid-camera', '#vid-library'].forEach((sel) => {
+  $(sel).addEventListener('change', (e) => handleVideo(e));
+});
+
+async function handleVideo(e) {
+  const file = e.target.files?.[0];
+  const code = pendingVideoPu;
+  e.target.value = '';
+  if (!file || !code) return;
+
+  toast('Uploading video… this can take a while on a slow connection.', 300000);
+  try {
+    const r = await fetch(`${API}/video-url`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ puCode: code, kind: file.type || '' }),
+    });
+    let payload = {};
+    try { payload = await r.json(); } catch { payload = {}; }
+    if (!r.ok) {
+      toast(payload.error || `Could not start the upload (HTTP ${r.status}).`, 10000);
+      await loadSummary({ fresh: true });
+      return;
+    }
+
+    // Checked here as well as server-side so an oversized file fails before it
+    // is sent, rather than after minutes of uploading on a phone connection.
+    if (payload.maxBytes && file.size > payload.maxBytes) {
+      toast(`That video is ${Math.round(file.size / 1048576)} MB, over the ` +
+            `${Math.round(payload.maxBytes / 1048576)} MB limit. Please upload a shorter clip.`, 12000);
+      return;
+    }
+
+    const put = await fetch(payload.url, {
+      method: 'PUT',
+      body: file,
+      headers: file.type ? { 'content-type': file.type } : undefined,
+    });
+    if (!put.ok) throw new Error('upload failed');
+
+    const doneRes = await fetch(`${API}/video-done`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ puCode: code, key: payload.key, videoId: payload.videoId, deviceId }),
+    });
+    let done = {};
+    try { done = await doneRes.json(); } catch { done = {}; }
+    if (!doneRes.ok) {
+      toast(done.error || `The video did not save (HTTP ${doneRes.status}).`, 12000);
+      return;
+    }
+
+    toast('Video uploaded.', 6000);
+    lastVideo = { puCode: code, videoId: done.videoId };
+    $('#email-err').hidden = true;
+    $('#video-email').value = '';
+    if (done.message) $('#email-ask').textContent = done.message;
+    $('#email-dlg').showModal();
+
+    await loadSummary({ fresh: true });
+    refreshRow(code);
+  } catch (err) {
+    console.error(err);
+    toast('Sorry, that video did not go through. Please try again.', 10000);
+  }
+}
+
+$('#email-save').addEventListener('click', async () => {
+  const err = $('#email-err');
+  const email = $('#video-email').value.trim();
+  err.hidden = true;
+  if (!email) {
+    err.textContent = 'Enter an email address, or choose “No thanks”.';
+    err.hidden = false;
+    return;
+  }
+  if (!lastVideo) { $('#email-dlg').close(); return; }
+
+  const btn = $('#email-save');
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/video-email`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...lastVideo, email }),
+    });
+    let payload = {};
+    try { payload = await r.json(); } catch { payload = {}; }
+    if (!r.ok) {
+      err.textContent = payload.error || `Could not save that (HTTP ${r.status}).`;
+      err.hidden = false;
+      return;
+    }
+    $('#email-dlg').close();
+    toast('Thank you — your email has been linked to the video.', 8000);
+    lastVideo = null;
+  } catch {
+    err.textContent = 'Could not reach the server. Please try again.';
+    err.hidden = false;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* What an ordinary visitor sees where the footage would be. The count is
+   public; the footage is not. */
+function videoBlock(data, code) {
+  const n = data.videos || 0;
+  if (!n) return '';
+  const held = esc(data.videoNotice ||
+    'Rest assured the video has been saved for future reference. They will be ' +
+    'admissible in court if the need arises');
+  const heading = `<strong>${nf.format(n)} video${n === 1 ? '' : 's'} uploaded ` +
+                  'for this polling unit.</strong>';
+
+  if (!isAdmin()) {
+    return `<div class="video-note">
+      ${heading}
+      <button class="btn btn-small" data-act="video-held">Play video</button>
+      <p class="muted video-held-inline">${held}</p>
+    </div>`;
+  }
+  return `<div class="video-note" data-videos-for="${esc(code)}">
+    ${heading}
+    <p class="muted">Loading the recordings…</p>
+  </div>`;
+}
+
+/* Admins get the actual recordings. The links are presigned and short-lived, so
+   they are fetched when the panel opens rather than embedded in the page. */
+async function loadAdminVideos(code, host) {
+  try {
+    const r = await fetch(`${API}/admin/videos?code=${encodeURIComponent(code)}` +
+                          `&election=${encodeURIComponent(VIEW())}`,
+                          { headers: { authorization: `Bearer ${adminToken}` } });
+    if (!r.ok) { host.insertAdjacentHTML('beforeend', '<p class="muted">Could not load the videos.</p>'); return; }
+    const { videos } = await r.json();
+    if (!videos?.length) return;
+
+    host.innerHTML =
+      `<strong>${nf.format(videos.length)} video${videos.length === 1 ? '' : 's'} ` +
+      'uploaded for this polling unit.</strong>' +
+      videos.map((v, i) => `
+        <div class="video-item">
+          <div><strong>Video ${i + 1}</strong> · ${new Date(v.ts).toLocaleString()}
+               · ${(v.bytes / 1048576).toFixed(1)} MB
+               · <span class="pu-code">phone ${esc(v.device)}</span></div>
+          <video controls preload="none" playsinline src="${esc(v.url)}"></video>
+          <div class="video-email">${v.email
+            ? `Uploader email: <strong>${esc(v.email)}</strong>`
+            : '<span class="muted">No email address was given.</span>'}</div>
+        </div>`).join('');
+  } catch {
+    host.insertAdjacentHTML('beforeend', '<p class="muted">Could not load the videos.</p>');
   }
 }
 
@@ -710,6 +889,13 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const vsrc = e.target.closest('[data-vsource]');
+  if (vsrc) {
+    $('#vid-source-dlg').close();
+    $(vsrc.dataset.vsource === 'camera' ? '#vid-camera' : '#vid-library').click();
+    return;
+  }
+
   const btn = e.target.closest('[data-act]');
   if (!btn) return;
   const code = btn.dataset.code;
@@ -751,6 +937,18 @@ document.addEventListener('click', (e) => {
     const pu = PU.unit(code);
     $('#source-pu').textContent = pu ? `${pu.name} · ${code}` : code;
     $('#source-dlg').showModal();
+  } else if (act === 'upload-video') {
+    if (!SUMMARY.uploadsEnabled && !SUMMARY.testMode) {
+      toast('Uploads are currently closed. Please come back when the administrator opens them.');
+      return;
+    }
+    pendingVideoPu = code;
+    const pu = PU.unit(code);
+    $('#vid-source-pu').textContent = pu ? `${pu.name} · ${code}` : code;
+    $('#vid-source-dlg').showModal();
+  } else if (act === 'video-held') {
+    // An ordinary visitor is told the footage is kept, and is not shown it.
+    $('#video-held-dlg').showModal();
   } else if (act === 'extract') {
     toggleExtract(code, btn.closest('tr'));
   } else if (act === 'approve') {

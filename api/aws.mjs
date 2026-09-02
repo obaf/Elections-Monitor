@@ -18,7 +18,7 @@ const creds = () => ({
   sessionToken: process.env.AWS_SESSION_TOKEN,
 });
 
-function signedFetch({ service, host, method = 'POST', path = '/', query = null, headers = {}, body = '', raw = false }) {
+function signedFetch({ service, host, method = 'POST', path = '/', query = null, headers = {}, body = '', raw = false, wantHeaders = false }) {
   const c = creds();
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
@@ -85,6 +85,7 @@ function signedFetch({ service, host, method = 'POST', path = '/', query = null,
         if (res.statusCode >= 300) {
           return reject(new Error(`${service} ${res.statusCode}: ${buf.toString('utf8').slice(0, 500)}`));
         }
+        if (wantHeaders) return resolve({ headers: res.headers, body: buf });
         resolve(raw ? buf : JSON.parse(buf.toString('utf8') || '{}'));
       });
     });
@@ -146,6 +147,23 @@ export async function s3List(bucket, prefix) {
     token = more && next ? next[1] : null;
   } while (token);
   return keys;
+}
+
+/* Size and type of an object without downloading it. A video can be hundreds
+ * of megabytes, so checking that an upload is within limits must not mean
+ * pulling it into the Lambda first. */
+export async function s3Head(bucket, key) {
+  const r = await signedFetch({
+    service: 's3',
+    host: `${bucket}.s3.${REGION}.amazonaws.com`,
+    method: 'HEAD',
+    path: s3Path(key),
+    wantHeaders: true,
+  });
+  return {
+    size: Number(r.headers['content-length'] || 0),
+    type: r.headers['content-type'] || '',
+  };
 }
 
 export const s3Delete = (bucket, key) =>
