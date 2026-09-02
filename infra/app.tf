@@ -214,32 +214,88 @@ resource "aws_s3_bucket_cors_configuration" "videos" {
   }
 }
 
-# Video is the expensive thing on this portal by an order of magnitude: 100,000
-# clips at ~50 MB is ~5 TB. Almost none of it is ever watched -- it is evidence
-# held in case it is needed -- so it moves down the storage classes quickly.
-# Glacier Instant Retrieval is the floor rather than a deeper tier because
-# evidence that takes hours to restore is not much use in a dispute.
+# Video is the expensive thing on this portal by an order of magnitude: 500,000
+# clips at ~50 MB is ~24 TB. Almost none of it is ever watched -- it is evidence
+# held in case it is needed -- so it is archived aggressively.
+#
+# Real footage goes to Glacier Instant Retrieval straight away and sinks to Deep
+# Archive at 90 days. That window is deliberate: election disputes happen in the
+# weeks after a vote, and Glacier IR plays instantly, so the footage is readable
+# for exactly as long as anyone is likely to ask for it. After that it is 4x
+# cheaper again, at the cost of a 12-hour restore.
+#
+# 90 days is also exactly Glacier IR's minimum billing duration, so nothing is
+# billed for storage it did not use.
+#
+# TEST FOOTAGE IS DELIBERATELY EXCLUDED. A test clip exists for minutes before
+# the test-mode wipe deletes it. Deep Archive bills a 180-day minimum per object
+# and Glacier IR a 90-day one, so archiving a clip that lives for five minutes
+# would bill months of storage for it. Test video therefore stays in Standard,
+# where deleting it costs nothing, and the rules below name the real elections
+# rather than filtering the test one out -- S3 lifecycle filters cannot express
+# "everything except", and a rule that silently caught videos/test/ is exactly
+# the mistake worth designing out.
+locals {
+  # Prefixes whose video is real evidence. keysFor() in api/util.mjs builds
+  # "videos/<election>", so a NEW ELECTION MUST BE ADDED HERE or its footage
+  # will sit in Standard at 6x the cost. tools/test_video.mjs asserts that this
+  # list and the elections in util.mjs agree.
+  archived_video_prefixes = [
+    "videos/osun/",
+    "videos/presidential/",
+  ]
+}
+
 resource "aws_s3_bucket_lifecycle_configuration" "videos" {
   bucket = aws_s3_bucket.videos.id
 
+  dynamic "rule" {
+    for_each = toset(local.archived_video_prefixes)
+
+    content {
+      id     = "archive-${trimsuffix(replace(rule.value, "/", "-"), "-")}"
+      status = "Enabled"
+
+      filter {
+        prefix = rule.value
+      }
+
+      # Straight to Glacier IR: instant to play, a sixth of Standard.
+      transition {
+        days          = 0
+        storage_class = "GLACIER_IR"
+      }
+
+      # Then the floor. Glacier Instant Retrieval is left behind at exactly its
+      # 90-day minimum, so there is no early-deletion charge.
+      transition {
+        days          = 90
+        storage_class = "DEEP_ARCHIVE"
+      }
+
+      abort_incomplete_multipart_upload {
+        days_after_initiation = 3
+      }
+    }
+  }
+
+  # Test footage: never archived, and swept up if the wipe ever misses it.
+  # One day is the shortest expiry S3 offers; in practice the test-mode wipe
+  # deletes these within minutes and this rule only catches strays.
   rule {
-    id     = "cheapen-video"
+    id     = "test-video-is-disposable"
     status = "Enabled"
-    filter {}
 
-    transition {
-      days          = 30
-      storage_class = "STANDARD_IA"
+    filter {
+      prefix = "videos/test/"
     }
 
-    transition {
-      days          = 120
-      storage_class = "GLACIER_IR"
+    expiration {
+      days = 1
     }
 
-    # A multipart upload that never finished is invisible and still billed.
     abort_incomplete_multipart_upload {
-      days_after_initiation = 3
+      days_after_initiation = 1
     }
   }
 }

@@ -8,7 +8,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { keysFor, TEST_ELECTION, presignGet, presignPut } from '../api/util.mjs';
+import { keysFor, TEST_ELECTION, REAL_ELECTIONS, presignGet, presignPut } from '../api/util.mjs';
 
 const api = readFileSync('api/index.mjs', 'utf8');
 const app = readFileSync('site/app.js', 'utf8');
@@ -147,6 +147,48 @@ console.log('\n7. The page offers video, and withholds it from ordinary visitors
   ok('only an admin loads the recordings', /if \(vHost && isAdmin\(\)\) loadAdminVideos/.test(app));
   ok('the player is only ever built from the admin route',
      app.indexOf('<video controls') > app.indexOf('/admin/videos'));
+}
+
+console.log('\n8. Storage lifecycle: real footage archived, test footage never');
+{
+  const lc = tf.slice(tf.indexOf('archived_video_prefixes'));
+
+  // Real evidence: instantly playable for the dispute window, then the floor.
+  ok('real video goes to Glacier IR at once',
+     /days\s+=\s+0[\s\S]{0,80}GLACIER_IR/.test(lc), 'day 0 keeps it instantly playable');
+  ok('and to Deep Archive at 90 days',
+     /days\s+=\s+90[\s\S]{0,80}DEEP_ARCHIVE/.test(lc));
+  // Leaving Glacier IR earlier than its 90-day minimum would bill for storage
+  // that was never used.
+  ok('90 days is exactly Glacier IR’s minimum, so nothing is billed unused',
+     !/days\s+=\s+([1-9]|[1-8][0-9])[\s\S]{0,80}DEEP_ARCHIVE/.test(lc));
+
+  /* The one that matters for the bill: a test clip lives for minutes, and both
+     Glacier IR and Deep Archive bill a 90- and 180-day minimum per object. A
+     rule that caught videos/test/ would charge months for a five-minute clip. */
+  const archiveRules = lc.slice(0, lc.indexOf('test-video-is-disposable'));
+  ok('no archive rule mentions the test prefix',
+     !/videos\/test/.test(archiveRules), 'archiving a disposable clip bills months for it');
+  ok('test video is expired, not transitioned',
+     /test-video-is-disposable[\s\S]{0,400}expiration/.test(lc));
+  ok('and no transition follows it',
+     !/test-video-is-disposable[\s\S]{0,400}storage_class/.test(lc));
+
+  /* keysFor() builds "videos/<election>", so every non-test election needs a
+     prefix here. Without this check a new election's footage would sit in
+     Standard at six times the cost, silently and indefinitely. */
+  const listed = [...lc.slice(0, lc.indexOf('resource')).matchAll(/"(videos\/[a-z]+\/)"/g)]
+    .map((m) => m[1]);
+  for (const id of REAL_ELECTIONS) {
+    const want = `${keysFor(id).videoPrefix}/`;
+    ok(`${id} footage is covered by a lifecycle rule`, listed.includes(want),
+       `add "${want}" to archived_video_prefixes in infra/app.tf`);
+  }
+  ok('the test election is NOT in that list',
+     !listed.includes(`${keysFor(TEST_ELECTION).videoPrefix}/`), listed.join(', '));
+  ok('every listed prefix is a real election',
+     listed.every((pfx) => REAL_ELECTIONS.some((id) => `${keysFor(id).videoPrefix}/` === pfx)),
+     listed.join(', '));
 }
 
 console.log(`\n${fail ? 'FAILURES: ' + fail : 'ALL PASSED'}  (${pass} checks)\n`);

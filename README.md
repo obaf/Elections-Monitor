@@ -321,9 +321,30 @@ Test-mode videos go to `videos/test/` under their own `VUPL#TEST` feed, and the
 wipe sweeps both. IAM grants `s3:DeleteObject` on `videos/test/*` only, so a bug
 in the wipe cannot reach real footage.
 
-Storage moves to STANDARD_IA at 30 days and GLACIER_IR at 120. Glacier Instant
-Retrieval is the floor rather than a deeper tier because evidence that takes
-hours to restore is not much use in a dispute.
+### Storage
+
+Real footage goes to **Glacier Instant Retrieval immediately** and sinks to
+**Deep Archive at 90 days**. Glacier IR plays instantly, so the video is
+readable for exactly as long as anyone is likely to ask for it — election
+disputes happen in the weeks after a vote — and then costs 4x less again, at
+the price of a 12-hour restore. 90 days is also exactly Glacier IR's minimum
+billing duration, so nothing is billed for storage it did not use.
+
+For 500,000 clips averaging 50 MB (≈24 TB): **$98/month for the first three
+months, then $24/month** — about $510 in year one and $290 every year after.
+Data in is free; AWS does not charge for inbound transfer.
+
+**Test footage is deliberately excluded from those rules.** A test clip exists
+for minutes before the wipe deletes it, while Glacier IR bills a 90-day minimum
+per object and Deep Archive a 180-day one — so archiving a five-minute clip
+would bill months for it. Test video stays in Standard, where deleting it costs
+nothing, with a one-day expiry as a backstop for anything the wipe misses.
+
+S3 lifecycle filters cannot express "everything except", so the rules name the
+real elections rather than excluding the test one. That means **a new election
+must be added to `archived_video_prefixes` in `infra/app.tf`** or its footage
+will sit in Standard at six times the cost, silently. `tools/test_video.mjs`
+asserts that list against the elections in `api/util.mjs`, in both directions.
 
 ## Archiving the Osun photos
 
